@@ -68,16 +68,16 @@ class VideoProcessor:
 
         return '\n'.join(lines)
 
-    def add_audio_and_subtitles_to_video(self, generate_data):
-        output_path = f'{OUTPUT_FOLDER}/movie_{int(time.time())}.mp4'
+    def add_audio_and_subtitles_to_video(self, save_falder, generate_data_list):
+        output_path = f'{save_falder}/movie_{int(time.time())}.mp4'
         # 元の動画を読み込む
         with VideoFileClip(self.video_path) as video:
             original_audio = video.audio
 
             # 新しい音声クリップを追加するための処理
             audio_clips = [original_audio]
-            for _, audio_file, start_time_sec in generate_data:
-                audio_clip = AudioFileClip(audio_file).set_start(start_time_sec)
+            for generate_data in generate_data_list:
+                audio_clip = AudioFileClip(generate_data["voice"]).set_start(generate_data["start_time_sec"])
                 audio_clips.append(audio_clip)
 
             # すべての音声クリップを結合
@@ -86,16 +86,19 @@ class VideoProcessor:
             # ビデオにオーディオを設定
             video = video.set_audio(final_audio)
 
+            subtitle_settings = SUBTITLE_SETTINGS.copy()
+
             # 字幕と動画を合成
             clips = [video]
-            for subtitle, audio_file, start_time_sec in generate_data:
-                audio_duration = AudioFileClip(audio_file).duration
-                # ここで字幕テキストを改行する
-                wrapped_subtitle = self._wrap_text(subtitle, 26)
+            for generate_data in generate_data_list:
+                # 字幕テキストを改行
+                wrapped_subtitle = self._wrap_text(generate_data["text"], 26)
+                # 字幕を付加
+                subtitle_settings["stroke_color"] = generate_data["color"]
                 subtitle_clip = TextClip(
                     wrapped_subtitle, 
-                    **SUBTITLE_SETTINGS
-                ).set_position(('center', 'bottom')).set_start(start_time_sec).set_duration(audio_duration)
+                    **subtitle_settings
+                ).set_position(('center', 'bottom')).set_start(generate_data["start_time_sec"]).set_duration(generate_data["voice_duration"])
                 clips.append(subtitle_clip)
 
             final_clip = CompositeVideoClip(clips)
