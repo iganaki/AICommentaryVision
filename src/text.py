@@ -1,4 +1,6 @@
+import datetime
 import os
+import random
 import traceback
 from openai import OpenAI
 from config import DEBUG_FLAG, MESSAGE_HISTORY_LIMIT
@@ -30,6 +32,7 @@ class CommentaryGenerator:
                 input_values = f"入力値: capture_base64={capture_base64_list}, user_prompt={user_prompt_list}"
                 full_error_message = f"{error_message}\n{input_values}\nスタックトレース:\n{stack_trace}"
                 print(full_error_message)
+                log.write_error_log(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
                 log.write_error_log(full_error_message)
                 return None
             content = response.choices[0].message.content
@@ -68,8 +71,12 @@ class CommentaryGenerator:
     def suppose_emotion(self, text):
         messages = self._create_emotion_prompt(text)
 
-        if 1: # 帰ってこないことがあるのでいったんDEBUG_FLAGを1にする。
-            emotion = "positive"
+        if DEBUG_FLAG:
+            # 感情のリスト
+            emotions = ['positive', 'negative', 'normal']
+
+            # ランダムに感情を選択
+            content = random.choice(emotions)
         else:
             try:
                 response = self.client.chat.completions.create(
@@ -81,30 +88,36 @@ class CommentaryGenerator:
             except Exception as e:
                 error_message = f"GPT3.5 API呼び出し中にエラーが発生しました: {e}"
                 stack_trace = traceback.format_exc()
-                input_values = f"入力値: text={text}"
+                input_values = f"入力値: text={text} 感情値計測"
                 full_error_message = f"{error_message}\n{input_values}\nスタックトレース:\n{stack_trace}"
                 print(full_error_message)
+                log.write_error_log(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
                 log.write_error_log(full_error_message)
-                return None
+                return 'normal'
             content = response.choices[0].message.content
-            emotion = self._evaluate_emotional_tone(content)
+        emotion = self._evaluate_emotional_tone(content)
         return emotion
     
     @staticmethod
     def _evaluate_emotional_tone(text):
-        if 'positive' in text:
+        if 'normal' in text:
+            return 'normal'
+        elif 'positive' in text:
             return 'positive'
         elif 'negative' in text:
             return 'negative'
-        # 想定外の返答の場合positiveにする。
+        # 想定外の返答の場合normalにする。
         else:
-            return 'positive' 
+            return 'normal' 
 
     @staticmethod
     def _create_emotion_prompt(text):
+        # 以下のテキストの感情的なトーンを判断してください。
+        # あなたの回答は「ポジティブ」、「ネガティブ」、または「ノーマル」のいずれか一つであるべきです。
+        # 感情的なトーンが不明確な場合は、「ノーマル」と回答してください。
         system_prompt = f'''
-            Please determine the emotional tone of the following text. Your response should be only the word "positive" or "negative". If the emotional tone is unclear, respond with "positive".
-
+            Please evaluate the emotional tone of the following text. Your response should be only one of the words 'positive', 'negative', or 'normal'. If the emotional tone is unclear, respond with 'normal'.
+            
             Text: "{text}"
         '''
         messages = [{"role": "system", "content": system_prompt}]

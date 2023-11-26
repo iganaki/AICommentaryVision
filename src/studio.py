@@ -113,7 +113,7 @@ class Studio:
             ]
 
             # カンペを生成
-            cue_card = self._create_cue_card(current_time)
+            cue_card = self._create_cue_card(current_time, self.counter_for_tempdata)
 
             # ストリーマーのセリフを生成
             generate_data = self.streamers[streamer_toggle].speak(self.counter_for_tempdata, capture_base64_list, time_passed, cue_card, partner_message)
@@ -211,9 +211,17 @@ class Studio:
         return streamer_toggle
 
     @staticmethod
-    def _create_cue_card(current_time):
+    def _create_cue_card(current_time, counter):
         cue_card = ""
         if current_time == START_TIME:
-            cue_card = "開始しました、視聴者に挨拶してください"
+            cue_card = "開始しました、「こんにちわんたん！めたんだよ！」から実況を始めてください"
+        elif counter == 1:
+            cue_card = "あなたの一言目です、「忍者界最強の実況者！今日も参ります！」から実況を始めてください"
+        elif counter == 30:
+            cue_card = "視聴者を笑わすため、おかしなことを言ってください"
+        elif counter == 40:
+            cue_card = "ユキのうっかりエピソードを話して"
+        elif counter == 51:
+            cue_card = "ここでボケて"
 
         return cue_card

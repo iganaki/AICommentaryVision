@@ -1,12 +1,12 @@
 speaker_name,style_name,emotion,style_id
-四国めたん,ノーマル,positive,2
-四国めたん,あまあま,,0
+四国めたん,ノーマル,normal,2
+四国めたん,あまあま,positive,0
 四国めたん,ツンツン,negative,6
 四国めたん,セクシー,,4
 四国めたん,ささやき,,36
 四国めたん,ヒソヒソ,,37
-ずんだもん,ノーマル,positive,3
-ずんだもん,あまあま,,1
+ずんだもん,ノーマル,normal,3
+ずんだもん,あまあま,positive,1
 ずんだもん,ツンツン,,7
 ずんだもん,セクシー,,5
 ずんだもん,ささやき,negative,22
@@ -34,7 +34,7 @@ speaker_name,style_name,emotion,style_id
 もち子さん,ノーマル,,20
 もち子さん,セクシー／あん子,,66
 剣崎雌雄,ノーマル,,21
-WhiteCUL,ノーマル,,23
+WhiteCUL,ノーマル,normal,23
 WhiteCUL,たのしい,positive,24
 WhiteCUL,かなしい,,25
 WhiteCUL,びえーん,negative,26
@@ -62,6 +62,7 @@ No.7,読み聞かせ,,31
 猫使ビィ,ノーマル,,58
 猫使ビィ,おちつき,,59
 猫使ビィ,人見知り,,60
+中国うさぎ,ノーマル,normal,61
 中国うさぎ,ノーマル,positive,61
 中国うさぎ,おどろき,,62
 中国うさぎ,こわがり,negative,63

@@ -37,14 +37,14 @@ def create_user_gui():
             "voicevox_chara": "WhiteCUL",
             "color": "#000080",
             "role": PLAYER,
-            "personality": "非常に感情豊かで、テンションの浮き沈みが激しい。",
+            "personality": "非常に感情豊かで、楽しかったり怖がったりとテンションの浮き沈みが激しい。",
             "speaking_style": "日本語話者。一人称は「わたし」、語尾は「～です」「～ます」をつける。慌てると言葉が乱れ、叫んだり、泣き言を言ったりする",
             "partner_name": "めたん",
             "partner_relationship": "尊敬している先輩。"
         }
 
     video_summary = {
-        "description": "JetIslandというオープンワールドVRゲームの初見プレイ"
+        "description": "JetIslandというオープンワールドVRゲームをプレイ。ユキは初めてプレイするが、めたんはこのゲームに詳しい"
     }
     # video_summary = {
     #     "description": "ポピュレーションワンというVRFPSで敵と戦闘中"

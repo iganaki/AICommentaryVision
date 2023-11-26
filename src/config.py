@@ -6,8 +6,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # outputフォルダの相対パス
 OUTPUT_FOLDER = os.path.join(BASE_DIR, '../output')
 
+# dataフォルダの相対パス
+DATA_FOLDER = os.path.join(BASE_DIR, '../data')
+
 # debugフラグ
-DEBUG_FLAG = True
+DEBUG_FLAG = False
 
 # 一人実況かどうか
 SOLO_GAMEPLAY_MODE = 0
