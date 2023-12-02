@@ -1,7 +1,7 @@
 from audio import VoiceGenerator
 from log import Log
+from static_data import Role
 from text import CommentaryGenerator
-from config import COMMENTATOR, PLAYER, SOLO_PLAYER
 
 class Streamer:
     def __init__(self, streamer_profile):
@@ -15,13 +15,16 @@ class Streamer:
         # 過去のメッセージ履歴を格納するリストの初期化
         self.previous_messages = []
 
+    def get_profile(self):
+        return self.streamer_profile
+
     # 動画作成前にストリーマーが準備する
     def prepare_for_streaming(self, save_folder, log: Log, video_summary):
-        if self.streamer_profile["role"] == SOLO_PLAYER:
+        if self.streamer_profile["role"] == Role.SOLO_PLAYER.value:
             self.system_prompt = self._create_system_prompt_for_solo_gameplay(video_summary)
-        elif self.streamer_profile["role"] == PLAYER:
+        elif self.streamer_profile["role"] == Role.PLAYER.value:
             self.system_prompt = self._create_system_prompt_for_duo_gameplay_player(video_summary)
-        elif self.streamer_profile["role"] == COMMENTATOR:
+        elif self.streamer_profile["role"] == Role.COMMENTATOR.value:
             self.system_prompt = self._create_system_prompt_for_duo_gameplay_commentator(video_summary)
         
         self.save_folder = save_folder
@@ -110,7 +113,7 @@ class Streamer:
         #     {video_summary["description"]}
 
         system_prompt = f'''
-            You are a popular YouTuber, and we are doing a game live commentary together. In this commentary, you will play the game and I will support you as a co-commentator. Based on real-time captures, we will infer the game situation and provide commentary that follows the conversation flow. To avoid boring the viewers, be careful not to repeat the same structure of words or phrases too often in the flow of the conversation. For example, after a descriptive comment, try using just a short exclamation, or after addressing the viewers, ask me a question, keeping in mind to vary the commentary style. Please entertain the viewers by expressing the current situation with emotional reactions and humor. Your responses should be limited to one sentence and should only include content related to the commentary.
+            You are a popular YouTuber, and we are doing a game live commentary together. Your responses should be limited to one sentence and should only include content related to the commentary. In this commentary, you will play the game and I will support you as a co-commentator. Based on real-time captures, we will infer the game situation and provide commentary that follows the conversation flow. To avoid boring the viewers, be careful not to repeat the same structure of words or phrases too often in the flow of the conversation. For example, after a descriptive comment, try using just a short exclamation, or after addressing the viewers, ask me a question, keeping in mind to vary the commentary style. Please entertain the viewers by expressing the current situation with emotional reactions and humor.
 
             Commentator (You) Information:
                 Name: {self.streamer_profile["name"]}
@@ -120,7 +123,7 @@ class Streamer:
                 Your view of me: {self.streamer_profile["partner_relationship"]}
 
             Broadcast Summary:
-                {video_summary["description"]}
+                {video_summary}
         '''
 
         return system_prompt
@@ -155,7 +158,7 @@ class Streamer:
                 Your view of me: {self.streamer_profile["partner_relationship"]}
 
             Broadcast Summary:
-                {video_summary["description"]}
+                {video_summary}
         '''
 
         return system_prompt
@@ -170,7 +173,7 @@ class Streamer:
         :return: LLMに読ませるためのuserプロンプトリスト。
         """
         user_prompt_list = []
-        if self.streamer_profile["role"] == SOLO_PLAYER:
+        if self.streamer_profile["role"] == Role.SOLO_PLAYER:
             if time_passed != 0:
                 time_passed_sec = int(time_passed)
                 user_prompt_list.append(f"Time has passed: {time_passed_sec} seconds since the last capture.")

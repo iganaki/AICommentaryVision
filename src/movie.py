@@ -5,7 +5,8 @@ import base64
 from io import BytesIO
 from PIL import Image
 from moviepy.editor import VideoFileClip, AudioFileClip, CompositeVideoClip, TextClip, CompositeAudioClip, ImageClip
-from config import DATA_FOLDER, OUTPUT_FOLDER, SUBTITLE_SETTINGS
+from config import CUE_SETTINGS, DATA_FOLDER, OUTPUT_FOLDER, SUBTITLE_SETTINGS
+from database import Database
 
 class VideoProcessor:
     def __init__(self, video_path):
@@ -27,7 +28,7 @@ class VideoProcessor:
 
         return duration
 
-    def get_video_capture_at_time(self, time_sec, resize_width, resize_height):
+    def get_video_capture_at_time(self, time_sec, resize_width=None, resize_height=None):
         # 指定した秒数に対応するフレーム番号を計算
         frame_number = int(time_sec * self.fps)
 
@@ -44,7 +45,8 @@ class VideoProcessor:
         image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
 
         # 画像をリサイズ
-        image = image.resize((resize_width, resize_height), Image.Resampling.LANCZOS)
+        if resize_width is not None and resize_height is not None:
+            image = image.resize((resize_width, resize_height), Image.Resampling.LANCZOS)
 
         # PIL画像をBASE64エンコードする
         buffered = BytesIO()
@@ -69,8 +71,9 @@ class VideoProcessor:
 
         return '\n'.join(lines)
 
-    def add_audio_and_subtitles_to_video(self, save_falder, generate_data_list):
+    def add_audio_and_subtitles_to_video(self, save_falder, title, db:Database):
         output_path = f'{save_falder}/movie_{int(time.time())}.mp4'
+        generate_data_list = db.fetch_serifs_by_video_title(title)
         # 元の動画を読み込む
         with VideoFileClip(self.video_path) as video:
             original_audio = video.audio
@@ -93,10 +96,26 @@ class VideoProcessor:
             # 字幕と立ち絵を動画に合成
             clips = [video]
             for generate_data in generate_data_list:
+                # 立ち絵とカンペの文章を動画に合成
+                if generate_data["cue_card_print"]:
+                    # 立ち絵の追加
+                    image_path = DATA_FOLDER + f'/images/AD/AD1.png'
+                    cue_image_position = (50, 50)
+                    cue_image_clip = ImageClip(image_path).set_position(('left', 'top')).set_start(generate_data["start_time_sec"]-2.0).set_duration(generate_data["voice_duration"])
+                    clips.append(cue_image_clip)
+
+                    # カンペの文章をホワイトボードに載せる
+                    wrapped_cue_text = self._wrap_text(generate_data['cue_card_print'], 5) # カンペテキストを改行
+                    text_clip = TextClip(
+                        wrapped_cue_text, 
+                        **CUE_SETTINGS
+                    ).set_position((cue_image_position[0], cue_image_position[1] + 20)).set_start(generate_data["start_time_sec"]-2.0).set_duration(generate_data["voice_duration"])
+                    clips.append(text_clip)
+
                 # 立ち絵を付加
                 if "voicevox_chara" in generate_data and "emotion" in generate_data:
                     image_path = self._get_character_image_path(generate_data["voicevox_chara"], generate_data["emotion"])
-                    image_clip = ImageClip(image_path).set_position("right").set_start(generate_data["start_time_sec"]).set_duration(generate_data["voice_duration"])
+                    image_clip = ImageClip(image_path).set_start(generate_data["start_time_sec"]).set_duration(generate_data["voice_duration"])
                     image_clip = self._make_bounce_animation(image_clip, video_height)
                     clips.append(image_clip)
                 
@@ -137,8 +156,8 @@ class VideoProcessor:
 
             if 0 <= t <= bounce_duration:
                 # サイン関数を使って跳ねる動きをシミュレート
-                return ('right', bottom_y - bounce_height * math.sin(t / bounce_duration * math.pi))
+                return ('right', bottom_y - bounce_height * math.sin(t / bounce_duration * math.pi)+30)
             else:
-                return ('right', bottom_y)
+                return ('right', bottom_y+30)
 
         return image_clip.set_position(position_func)
