@@ -160,3 +160,8 @@ cython_debug/
 #.idea/
 
 output/
+AICommentaryVision/
+
+.env
+src/experiment.py
+src/vvid.py

@@ -1,8 +1,9 @@
 import os
+from re import S
 import sqlite3
 from config import DATABASE_FOLDER
 
-from static_data import CUE_CARD_DATA
+from static_data import CUE_CARD_DATA, RELATIONSHIP_DATA, STATIC_STREAMER_PROFILES_DATA, TALK_THEME_DATA
 
 class Database:
     def __init__(self, db_name):
@@ -15,7 +16,6 @@ class Database:
     def create_master_data_table(self):
         with self.conn:
             # カンペテーブル
-            # テーブルの生成
             self.conn.execute('''
                 CREATE TABLE IF NOT EXISTS cue_cards (
                     id INTEGER PRIMARY KEY,
@@ -25,17 +25,59 @@ class Database:
                     next_cue_print TEXT
                 )
             ''')
-
             # データが存在するか確認し、存在しない場合はデータを追加
-            if not self.is_setup_cue_card_table_present():
+            if not self.is_setup_database_table_present("cue_cards"):
                 self.setup_cue_card_table()
 
-            # 別のマスタテーブルもここに書く
+            # トークテーマテーブル
+            self.conn.execute('''
+                CREATE TABLE IF NOT EXISTS talk_themes (
+                    id INTEGER PRIMARY KEY,
+                    theme TEXT,
+                    theme_jp TEXT
+                )
+            ''')
 
+            # データが存在するか確認し、存在しない場合はデータを追加
+            if not self.is_setup_database_table_present("talk_themes"):
+                self.setup_talk_theme_table()
+
+            # ストリーマープロフィールテーブル
+            self.conn.execute('''
+                CREATE TABLE IF NOT EXISTS static_streamer_profiles (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT,
+                    voicevox_chara TEXT,
+                    color TEXT,
+                    personality TEXT,
+                    speaking_style TEXT
+                )
+            ''')
+
+            # データが存在するか確認し、存在しない場合はデータを追加
+            if not self.is_setup_database_table_present("static_streamer_profiles"):
+                self.setup_static_streamer_profiles_table()
+
+            # 関係性テーブル
+            self.conn.execute('''
+                CREATE TABLE IF NOT EXISTS relationships (
+                    id INTEGER PRIMARY KEY,
+                    our_relationship TEXT,
+                    your_role1 TEXT,
+                    your_role2 TEXT
+                )
+            ''')
+
+            # データが存在するか確認し、存在しない場合はデータを追加
+            if not self.is_setup_database_table_present("relationships"):
+                self.setup_relationship_table()
+
+            # 別のマスタテーブルもここに書く
+                
     # データが存在するか確認
-    def is_setup_cue_card_table_present(self):
+    def is_setup_database_table_present(self, table_name):
         cursor = self.conn.cursor()
-        cursor.execute('SELECT COUNT(*) FROM cue_cards')
+        cursor.execute('SELECT COUNT(*) FROM ' + table_name)
         count = cursor.fetchone()[0]  # 最初のカラムの値を取得
         cursor.close()
         return count > 0
@@ -44,16 +86,47 @@ class Database:
     def setup_cue_card_table(self):
         with self.conn:
             self.conn.executemany('INSERT INTO cue_cards (cue_card, cue_card_print, next_cue, next_cue_print) VALUES (?, ?, ?, ?)', CUE_CARD_DATA)
-
+            
     # 個別追加用
     def insert_cue_card(self, cue_card_data):
         with self.conn:
             self.conn.execute('INSERT INTO cue_cards (cue_card, cue_card_print, next_cue, next_cue_print) VALUES (?, ?, ?, ?)', cue_card_data)
 
+    # まとめて取得
     def fetch_all_cue_cards(self):
         query = 'SELECT * FROM cue_cards'
         return self._fetch_data(query)
+    
+    # 初期化時にまとめて追加
+    def setup_talk_theme_table(self):
+        with self.conn:
+            self.conn.executemany('INSERT INTO talk_themes (theme, theme_jp) VALUES (?, ?)', TALK_THEME_DATA)
 
+    # まとめて取得
+    def fetch_all_talk_themes(self):
+        query = 'SELECT * FROM talk_themes'
+        return self._fetch_data(query)
+    
+    # 初期化時にまとめて追加
+    def setup_static_streamer_profiles_table(self):
+        with self.conn:
+            self.conn.executemany('INSERT INTO static_streamer_profiles (name, voicevox_chara, color, personality, speaking_style) VALUES (?, ?, ?, ?, ?)', STATIC_STREAMER_PROFILES_DATA)
+
+    # まとめて取得
+    def fetch_all_static_streamer_profiles(self):
+        query = 'SELECT * FROM static_streamer_profiles'
+        return self._fetch_data(query)
+    
+    # 初期化時にまとめて追加
+    def setup_relationship_table(self):
+        with self.conn:
+            self.conn.executemany('INSERT INTO relationships (our_relationship, your_role1, your_role2) VALUES (?, ?, ?)', RELATIONSHIP_DATA)
+
+    # まとめて取得
+    def fetch_all_relationships(self):
+        query = 'SELECT * FROM relationships'
+        return self._fetch_data(query)
+    
     def create_videos_table(self):
         with self.conn:
             self.conn.execute('''
@@ -97,7 +170,8 @@ class Database:
                     personality TEXT,
                     speaking_style TEXT,
                     partner_name TEXT,
-                    partner_relationship TEXT
+                    our_relationship TEXT,
+                    your_role TEXT
                 )
             ''')
              # インデックスの作成
@@ -107,8 +181,8 @@ class Database:
         with self.conn:
             self.conn.execute('''
                 INSERT INTO streamer_profiles 
-                (video_title, name, voicevox_chara, color, role, personality, speaking_style, partner_name, partner_relationship) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (video_title, name, voicevox_chara, color, role, personality, speaking_style, partner_name, our_relationship, your_role) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 video_title,
                 profile["name"],
@@ -118,13 +192,14 @@ class Database:
                 profile["personality"],
                 profile["speaking_style"],
                 profile["partner_name"],
-                profile["partner_relationship"]
+                profile["our_relationship"],
+                profile["your_role"]
             ))
       
     def fetch_streamer_profiles_by_video_title(self, video_title):
         query = 'SELECT * FROM streamer_profiles WHERE video_title = ?'
         return self._fetch_data(query, (video_title,))
-
+    
     def create_serifs_table(self):
         with self.conn:
             self.conn.execute('''
@@ -204,7 +279,36 @@ class Database:
     def delete_serifs_by_video_title(self, video_title):
         with self.conn:
             self.conn.execute('DELETE FROM serifs WHERE video_title = ?', (video_title,))
-    
+
+    # ラジオパートテーブルを作成
+    def create_radio_parts_table(self):
+        with self.conn:
+            self.conn.execute('''
+                CREATE TABLE IF NOT EXISTS radio_parts (
+                    id INTEGER PRIMARY KEY,
+                    video_title TEXT,
+                    part_name TEXT,
+                    talk_theme TEXT,
+                    talk_theme_jp TEXT,
+                    background_image_url TEXT
+                )
+            ''')
+             # インデックスの作成
+            self.conn.execute('CREATE INDEX IF NOT EXISTS idx_video_title ON radio_parts (video_title)')
+
+    # ラジオパートを挿入
+    def insert_radio_part(self, video_title, part_name, talk_theme):
+        with self.conn:
+            self.conn.execute('''
+                INSERT INTO radio_parts (video_title, part_name, talk_theme, talk_theme_jp, background_image_url)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (video_title, part_name, talk_theme['theme'], talk_theme['theme_jp'], talk_theme['background_image_url']))
+
+    # 指定したvideo_titleのラジオパートをすべて取得
+    def fetch_radio_parts_by_video_title(self, video_title):
+        query = 'SELECT * FROM radio_parts WHERE video_title = ?'
+        return self._fetch_data(query, (video_title,))
+
     def _fetch_data(self, query, params=None, fetch_all=True):
         cursor = self.conn.cursor()
         cursor.execute(query, params or ())
