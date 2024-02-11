@@ -1,4 +1,6 @@
 import os
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 # 基本設定
 # ------------------------
@@ -11,9 +13,20 @@ OUTPUT_FOLDER = os.path.join(BASE_DIR, '../output')  # 出力フォルダ
 DATA_FOLDER = os.path.join(BASE_DIR, '../data')      # データフォルダ
 DATABASE_FOLDER = os.path.join(BASE_DIR, '../db')    # データベースフォルダ
 
+# ディレクトリがない場合は作成
+os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+os.makedirs(DATA_FOLDER, exist_ok=True)
+os.makedirs(DATABASE_FOLDER, exist_ok=True)
+
+# データベース設定
+# ----------------
+database_path = os.path.join(DATABASE_FOLDER, 'database.db')
+engine = create_engine(f'sqlite:///{database_path}')
+Session = sessionmaker(bind=engine)
+
 # 機能フラグ設定
 # ----------------
-DEBUG_FLAG = False            # デバッグモード
+DEBUG_FLAG = True            # デバッグモード
 EXPERIMENT_FLAG = False       # 実験モード
 CUE_CARDS_PRINT_FLAG = False  # カンペ表示
 AI_DIRECTOR_MODE = True       # AIディレクターモード
@@ -22,8 +35,8 @@ AI_DIRECTOR_MODE = True       # AIディレクターモード
 # ----------------------
 START_TIME = 1.5              # 実況開始時間（秒）
 MAX_EXTRA_ROUNDS = 3          # 最大追加ラウンド数
-RADIO_DURATION_SEC = 180      # ラジオの1パートの時間（秒）
-RADIO_THEME_TALK_NUM = 4      # トークテーマ数
+RADIO_DURATION_SEC = 60      # ラジオの1パートの時間（秒）
+RADIO_THEME_TALK_NUM = 2      # トークテーマ数
 RADIO_SUMMARY_FLAG = True     # ラジオのまとめトークをするかどうか
 
 # 字幕・カンペ設定

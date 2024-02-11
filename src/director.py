@@ -1,10 +1,12 @@
 from calendar import c
 import random
 from abc import ABC, abstractmethod
-from config import AI_DIRECTOR_MODE, MAX_EXTRA_ROUNDS, RADIO_THEME_TALK_NUM
-from database import Database
+from requests import session
+from config import AI_DIRECTOR_MODE, MAX_EXTRA_ROUNDS, RADIO_THEME_TALK_NUM, Session
+from model import CueCard, Serif, TalkTheme
 from static_data import Mode, Role
 from openai_client  import OpenAIClient 
+import model
 
 def create_director_instance(mode, *args, **kwargs):
     """
@@ -29,38 +31,42 @@ class Director(ABC):
         self.commentary_generator = OpenAIClient()
 
     # 動画作成前にディレクターが準備する
-    def prepare_for_streaming(self, streamers, database:Database):
+    def prepare_for_streaming(self, streamers):
         self.streamers = streamers
         self.cue_interval = random.randint(8, 12)
         self.next_cue, self.next_cue_print = "", ""
-        self.database = database
         self.continue_counter = 3
         if AI_DIRECTOR_MODE == True:
             self.systemprompt = self._create_cue_system_prompt()
         else:
-            self.cue_cards = self.database.fetch_all_cue_cards()
+            session = Session()
+            self.cue_cards = session.query(CueCard).all()
             self.temp_cue_cards = self.cue_cards
+            session.close()
 
-    def create_cue_card(self, extra_rounds, counter, streamer_index, start_flag, end_flag):
+    def create_cue_card(self, extra_rounds, counter):
         cue_card, cue_card_print = "", ""
-        self.current_streamer = self.streamers[streamer_index]
-        if self.streamers[streamer_index].get_profile()["role"] != Role.SOLO_PLAYER.value:
-            self.partner_streamer = self.streamers[1-streamer_index]
         
         if self.cue_interval > 0:
             self.cue_interval -= 1
 
         # 最初の一言目のカンペを出す
-        cue_card, cue_card_print = self._generate_starting_cue(start_flag, counter)
+        cue_card, cue_card_print = self._generate_starting_cue(counter)
 
         # 動画終了時のカンペを出す。
         if extra_rounds < MAX_EXTRA_ROUNDS and cue_card == "":
-            cue_card, cue_card_print = self._generate_ending_cue(end_flag, extra_rounds)
+            cue_card, cue_card_print = self._generate_ending_cue(extra_rounds)
         
         # 連続したカンペがある場合、出す。
         if self.next_cue != "" and cue_card == "":
             cue_card, cue_card_print = self.next_cue, self.next_cue_print
             self.next_cue, self.next_cue_print = "", ""
+
+        # カンペを継続して出す
+        if self.continue_counter < 3 and cue_card == "":
+            if AI_DIRECTOR_MODE == True:
+                cue_card, cue_card_print = f"(the instructions mentioned in the statement {self.continue_counter} items back)"+self.current_cue, self.current_cue_print
+                self.continue_counter += 1
 
         # カンペを出す。
         if self.cue_interval == 0 and cue_card == "":
@@ -74,14 +80,6 @@ class Director(ABC):
             self.current_cue, self.current_cue_print = cue_card, cue_card_print
             self.cue_interval = random.randint(8, 14)
             self.continue_counter = 0
-
-        # カンペを継続して出す
-        if AI_DIRECTOR_MODE == True:
-            if self.continue_counter == 0:
-                self.continue_counter += 1
-            elif self.continue_counter < 3:
-                cue_card, cue_card_print = f"(the instructions mentioned in the statement {self.continue_counter} items back)"+self.current_cue, self.current_cue_print
-                self.continue_counter += 1
 
         return cue_card, cue_card_print
     
@@ -107,18 +105,16 @@ class Director(ABC):
 
         # ランダムにカンペカードを選択
         selected_cue_card = random.choice(self.temp_cue_cards)
-        self.next_cue, self.next_cue_print = selected_cue_card["next_cue"], selected_cue_card["next_cue_print"]
-            
+        self.next_cue, self.next_cue_print = selected_cue_card.next_cue, selected_cue_card.next_cue_print
 
         # 選択されたカンペカードをリストから削除
-        selected_cue_card_id = selected_cue_card['id']
-        self.temp_cue_cards = [card for card in self.temp_cue_cards if card['id'] != selected_cue_card_id]
+        self.temp_cue_cards.remove(selected_cue_card)
 
         # カンペカードリストがなくなったら補充
         if not self.temp_cue_cards:
             self.temp_cue_cards = self.cue_cards.copy
 
-        return selected_cue_card["cue_card"], selected_cue_card["cue_card_print"]
+        return selected_cue_card.cue_card, selected_cue_card.cue_card_print
 
     @abstractmethod
     def _create_cue_system_prompt(self):
@@ -134,7 +130,7 @@ class GameStreamDirector(Director):
         self.title = video_title
         self.video_summary = video_summary
 
-    def _generate_starting_cue(self, start_flag, counter):
+    def _generate_starting_cue(self, counter):
         if counter == 0:
             return "開始しました、自分の名前をもじった挨拶から実況を始めてください", "挨拶して"
         elif counter == 1:
@@ -154,7 +150,8 @@ class GameStreamDirector(Director):
     
     def _create_cue_user_prompt(self):
         # 直近20個のセリフをテキストで取得
-        serif_text = self.database.get_serif_text_by_video_title(self.title, 20, False)
+        with model.session_scope() as session:
+            serif_text = Serif.get_serif_text_by_video_title(session, self.title, 20, False)
 
         # 直近のストリーマーの発言：
         user_prompt = f'''
@@ -165,13 +162,13 @@ class GameStreamDirector(Director):
         return user_prompt
     
 class RadioDirector(Director):
-    def prepare_for_radio_part(self, index, radio_title, radio_theme):
+    def prepare_for_radio_part(self, index, part_name, part_theme):
         self.radio_part_index = index
-        self.title = radio_title
-        self.radio_theme = radio_theme
+        self.title = part_name
+        self.part_theme = part_theme
 
-    def _generate_starting_cue(self, start_flag, counter):
-        if start_flag == True:
+    def _generate_starting_cue(self, counter):
+        if self.radio_part_index == 0:
             return self._radio_start_cue(counter)
         else:
             return self._radio_after_the_commercial_cue(counter) 
@@ -194,8 +191,8 @@ class RadioDirector(Director):
             return "トークテーマに耳なじみのない単語があったら、解説・質問などしてください", "感想"
         return "", ""
 
-    def _generate_ending_cue(self, end_flag, extra_rounds):
-        if end_flag == True:
+    def _generate_ending_cue(self, extra_rounds):
+        if self.radio_part_index == RADIO_THEME_TALK_NUM-1:
             return self._radio_end_cue(extra_rounds)
         else:
             return self._radio_before_the_commercial_cue(extra_rounds)
@@ -229,11 +226,12 @@ class RadioDirector(Director):
     
     def _create_cue_user_prompt(self):
         # 直近20個のセリフをテキストで取得
-        serif_text = self.database.get_serif_text_by_video_title(self.title, 20, False)
+        with model.session_scope() as session:
+            serif_text = Serif.get_serif_text_by_video_title(session, self.title, 20, False)
 
         # 直近のストリーマーの発言：
         user_prompt = f'''
-            current theme: {self.radio_theme}
+            current theme: {self.part_theme}
             Most recent streamer statement:
             {serif_text}
         '''
@@ -254,7 +252,8 @@ class RadioDirector(Director):
 
     def _generate_random_talk_theme(self):
         # トークテーマをデータベースから取得
-        all_talk_themes = self.database.fetch_all_talk_themes()
+        with model.session_scope() as session:
+            all_talk_themes = session.query(TalkTheme).all()
         selected_talk_theme = random.choice(all_talk_themes)
         return selected_talk_theme
 
@@ -280,7 +279,8 @@ class RadioDirector(Director):
         # 今までのトークを取得
         serif_texts = []
         for i in range(RADIO_THEME_TALK_NUM - 1):
-            serif_texts.append(self.database.get_serif_text_by_video_title(title + f"_{i}", 0, False))
+            with model.session_scope() as session:
+                serif_texts.append(Serif.get_serif_text_by_video_title(session, title + f"_{i}", 0, False))
         summary = {}
         summary['theme'] = self.commentary_generator.generate_radio_summary(serif_texts)
         summary['theme_jp'] = '今日のまとめ'

@@ -2,47 +2,67 @@ import os
 import random
 import re
 import time
-from config import OUTPUT_FOLDER
-from database import Database
-from static_data import Mode, Role
+from turtle import st
+from audio import VoiceGenerator
+from config import Session, engine
+from model import Base, CueCard, Relationship, StaticStreamerProfile, StreamerProfile, TalkTheme, Video
+from static_data import CUE_CARD_DATA, RELATIONSHIP_DATA, STATIC_STREAMER_PROFILES_DATA, TALK_THEME_DATA, Mode, Role
+from studio import Studio
 
+def initialize_project():
+    # データベースの初期化
+    Base.metadata.create_all(engine)
+    session = Session()
+    
+    # 静的データとモデルクラスのマッピング
+    static_data_mappings = {
+        CueCard: CUE_CARD_DATA,
+        TalkTheme: TALK_THEME_DATA,
+        Relationship: RELATIONSHIP_DATA,
+        StaticStreamerProfile: STATIC_STREAMER_PROFILES_DATA
+    }
+    # 共通メソッドを使用して静的データを挿入
+    for model_class, data_list in static_data_mappings.items():
+        _insert_static_data(session, model_class, data_list)
+    
+    # TTSの初期化
+    VoiceGenerator.set_tts()
+    
+    session.close()
+
+def _insert_static_data(session, model_class, data_list):
+    if session.query(model_class).count() == 0:
+        for data in data_list:
+            model_instance = model_class(**data)
+            session.add(model_instance)
+        session.commit()
 
 def set(mode, title = "", video_summary = "", video_path = ""):
-
-    database = _initialize_project()
-
+    # タイトルが空の場合は現在の時間をタイトルにする
     if title == "":
         title = str(int(time.time()))
-    if database.is_video_title_present(title):
-        raise ValueError("すでにそのタイトルの動画が存在します。")
+    session = Session()
+    # すでにそのタイトルの動画が存在する場合はエラー
+    if session.query(Video).filter(Video.video_title == title).first() is not None:
+        raise Exception("すでにそのタイトルの動画が存在します")
+    # 動画情報をデータベースに登録    
+    video = Video(video_title=title, mode=mode, video_summary=video_summary, video_path=video_path)
+    session.add(video)
+    session.commit()
+    session.close()
 
-    database.insert_video({
-    "video_title": title,
-    "mode": mode,
-    "video_summary": video_summary,
-    "video_path": video_path
-    })
+    _set_streamer_profiles(mode, title)
 
-    _set_streamer_profiles(database, mode, title)
+    studio = Studio(title)
 
-    return database, title
+    return studio
 
-def _initialize_project():
-    os.makedirs(OUTPUT_FOLDER, exist_ok=True)
-    database = Database("AICommentaryVision.db")
-    database.create_master_data_table()
-    database.create_videos_table()
-    database.create_streamer_profiles_table()
-    database.create_serifs_table()
-    database.create_radio_parts_table()
+def _set_streamer_profiles(mode, title):
+    session = Session()
 
-    return database
-
-def _set_streamer_profiles(database:Database, mode, title):
-
-    # データベースにストリーマーのプロフィールを取得
+    # データベースからストリーマーのプロフィールを取得
     streamer_profiles = []
-    static_streamer_profiles = database.fetch_all_static_streamer_profiles()
+    static_streamer_profiles = session.query(StaticStreamerProfile).all()
     selected_static_streamer_profile = random.choice(static_streamer_profiles)
     streamer_profiles.append(selected_static_streamer_profile)
     # モードが二人用の場合
@@ -51,35 +71,45 @@ def _set_streamer_profiles(database:Database, mode, title):
         # 二人目のプロフィールを取得
         streamer_profiles.append(random.choice(static_streamer_profiles))
         # データベースから関係性を取得
-        relationships = random.choice(database.fetch_all_relationships())
-        your_roles = [relationships["your_role2"], relationships["your_role1"]]
+        relationships = random.choice(session.query(Relationship).all())
+        your_roles = [relationships.your_role2, relationships.your_role1]
 
     # データベースにストリーマーのプロフィールを登録
-    for index, streamer_profile in enumerate(streamer_profiles):
-        streamer_profile["role"] = _get_role(mode, index)
+    for index, temp_streamer_profile in enumerate(streamer_profiles):
+        role = _get_role(mode, index)
         if len(streamer_profiles) == 1:
-            streamer_profile["partner_name"] = ""
-            streamer_profile["partner_relationship"] = ""
-            streamer_profile["your_role"] = ""
+            partner_name = ""
+            our_relationship = ""
+            your_role = ""
         else:
-            streamer_profile["partner_name"] = streamer_profiles[1-index]["name"]
-            streamer_profile["our_relationship"] = relationships["our_relationship"]
-            streamer_profile["your_role"] = your_roles[1-index]
-
-        database.insert_streamer_profile(title, streamer_profile)
-
-
+            partner_name = streamer_profiles[1-index].name
+            our_relationship = relationships.our_relationship
+            your_role = your_roles[1-index]
+        streamer_profile = StreamerProfile(
+            video_title=title, 
+            name=temp_streamer_profile.name, 
+            voicevox_chara=temp_streamer_profile.voicevox_chara, 
+            color=temp_streamer_profile.color, 
+            role=role, 
+            personality=temp_streamer_profile.personality, 
+            speaking_style=temp_streamer_profile.speaking_style, 
+            partner_name=partner_name, 
+            our_relationship=our_relationship, 
+            your_role=your_role)
+        session.add(streamer_profile)
+    session.commit()
+    session.close() 
 
 def _get_role(mode, index):
     if mode is Mode.DUO_RADIO.value:
         if index == 0:
-            return Role.RADIO_PERSONALITY1.value
+            return Role.DUO_RADIO_HOST.value
         else:
-            return Role.RADIO_PERSONALITY2.value
+            return Role.DUO_RADIO_GUEST.value
     elif mode is Mode.DUO_GAMEPLAY.value:
         if index == 0:
-            return Role.COMMENTATOR.value
+            return Role.DUO_GAME_COMMENTATOR.value
         else:
-            return Role.PLAYER.value
+            return Role.DUO_GAME_PLAYER.value
     elif mode is Mode.SOLO_GAMEPLAY.value:
-        return Role.RADIO_PERSONALITY.value
+        return Role.SOLO_PLAYER.value

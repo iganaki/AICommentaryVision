@@ -1,25 +1,28 @@
 import os
 import random
-from config import MAX_EXTRA_ROUNDS, OUTPUT_FOLDER, RADIO_DURATION_SEC, RADIO_SUMMARY_FLAG, RADIO_THEME_TALK_NUM, START_TIME
-from database import Database
+from config import MAX_EXTRA_ROUNDS, OUTPUT_FOLDER, RADIO_DURATION_SEC, RADIO_SUMMARY_FLAG, RADIO_THEME_TALK_NUM, START_TIME, Session
 from director import create_director_instance
+from model import RadioPart, Serif, StreamerProfile, Video
 from static_data import Mode
 from streamer import Streamer
 from movie import VideoProcessor
 import log
 
 class Studio:
-    def __init__(self, database: Database, title):
-        self.database = database
+    def __init__(self, title):
+        session = Session()
 
-        video_data = database.fetch_video_by_title(title)
-        self.video_data = video_data[0]
-        streamers = database.fetch_streamer_profiles_by_video_title(title)
+        # 動画情報をデータベースから取得
+        video_data = session.query(Video).filter(Video.video_title == title).first()
+        self.video_data = video_data
+
+        # ストリーマーのプロフィールをデータベースから取得
+        streamer_profiles = session.query(StreamerProfile).filter(StreamerProfile.video_title == title).all()
         self.streamers = []
-        for streamer in streamers:
-            self.streamers.append(Streamer(streamer))
+        for streamer_profile in streamer_profiles:
+            self.streamers.append(Streamer(streamer_profile))
 
-        self.director = create_director_instance(self.video_data["mode"])
+        self.director = create_director_instance(self.video_data.mode)
 
         self.title = title
         self.output_path = OUTPUT_FOLDER + "/" + self.title
@@ -29,43 +32,46 @@ class Studio:
 
         self.log = log.Log(self.output_path, title)
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.database.close()
+        session.close()
 
     def create_video(self):
         # 動画処理クラスの初期化
         video_processor = VideoProcessor()
 
         # ディレクターの準備
-        self.director.prepare_for_streaming(self.streamers, self.database)
+        self.director.prepare_for_streaming(self.streamers)
 
         #  ストリーマーの準備
         for streamer in self.streamers:
-            streamer.prepare_for_streaming(self.output_path, self.log, self.video_data["video_summary"])
+            streamer.prepare_for_streaming(self.output_path, self.log, self.video_data.video_summary)
 
-        if self.video_data["mode"] == Mode.SOLO_GAMEPLAY.value:
+        if self.video_data.mode == Mode.SOLO_GAMEPLAY.value:
             # アップデートできていないので動かない。
             raise ValueError("無効なモードです")
             # self._create_solo_commentary(video_processor)
-        elif self.video_data["mode"] == Mode.DUO_GAMEPLAY.value:
+        elif self.video_data.mode == Mode.DUO_GAMEPLAY.value:
             # 動画の読み込み
-            video_processor.add_video(self.video_data["video_path"])
-            self.log.write_to_log_file("video_path", self.video_data["video_path"])
+            video_processor.add_video(self.video_data.video_path)
+            self.log.write_to_log_file("video_path", self.video_data.video_path)
             # 実況文を生成
             self._create_duo_commentary(video_processor)
             # 動画に実況音声、字幕を付加して保存
-            final_video_path = video_processor.add_audio_and_subtitles_to_video(self.output_path, self.title, self.database)
+            final_video_path = video_processor.add_audio_and_subtitles_to_video(self.output_path, self.title)
             self.log.write_to_log_file("final_video_path", final_video_path)
-            self.log.write_to_log_file("まとめ", self.database.get_serif_text_by_video_title(self.title, 0, True))
-        elif self.video_data["mode"] == Mode.DUO_RADIO.value:
+            session = Session()
+            self.log.write_to_log_file("まとめ", Serif.get_serif_text_by_video_title(session, self.title, 0, True))
+            session.close()
+        elif self.video_data.mode == Mode.DUO_RADIO.value:
             # 実況文を生成
             self._create_duo_radio()
             # 動画に実況音声、字幕を付加して保存
-            final_video_path = video_processor.create_radio(self.output_path, self.title, self.database)
+            final_video_path = video_processor.create_radio(self.output_path, self.title)
             self.log.write_to_log_file("final_video_path", final_video_path)
-            radio_parts = self.database.fetch_radio_parts_by_video_title(self.title)
-            for i in range(RADIO_THEME_TALK_NUM):
-                self.log.write_to_log_file(f"トークテーマ:{radio_parts[i]['talk_theme_jp']}", self.database.get_serif_text_by_video_title(self.title + "_" + str(i), 0, True))
+            session = Session()
+            radio_parts = session.query(RadioPart).filter(RadioPart.video_title == self.title).all()
+            for radio_part in radio_parts:
+                self.log.write_to_log_file(f"トークテーマ:{radio_part.talk_theme_jp}", Serif.get_serif_text_by_video_title(session, radio_part.part_name, 0, True))
+            session.close()
         else:
             raise ValueError("無効なモードです")
 
@@ -114,15 +120,15 @@ class Studio:
         return generate_data_list
 
     def _create_duo_commentary(self, video_processor:VideoProcessor):
+        session = Session()
         # 初期化
         self.speak_counter = 0
         total_duration_sec = video_processor.get_duration()
         current_time = START_TIME
-        time_passed = 0
         streamer_toggle = 0
         partner_message = ""
         extra_rounds = MAX_EXTRA_ROUNDS
-        self.director.prepare_for_gameStream(self.title, self.video_data["video_summary"])
+        self.director.prepare_for_gameStream(self.title, self.video_data.video_summary)
 
         # 動画終了に近くなるまでループ
         while extra_rounds > 0:
@@ -161,16 +167,19 @@ class Studio:
             partner_message = generate_data["text"]
 
             # セリフデータをデータベースに挿入
-            self.database.insert_serif(self.title, generate_data)
+            Serif.insert_serif(session, self.title, generate_data)
             
             # ストリーマーを切り替え
             streamer_toggle = 1 - streamer_toggle
             self.speak_counter += 1
+            session.commit()
 
         log.update_dialogue_progress(total_duration_sec, current_time)
+        session.close()
 
     # ラジオモード
     def _create_duo_radio(self):
+        session = Session()
 
         for i in range(RADIO_THEME_TALK_NUM):
             # 初期化
@@ -181,8 +190,6 @@ class Studio:
             partner_message = ""
             self.consecutive_count = 1
             streamer_toggle = 0
-            start_flag = True if i == 0 else False
-            end_flag = True if i == (RADIO_THEME_TALK_NUM-1) else False
             [streamer.reset_previous_messages() for streamer in self.streamers]
 
             if i is (RADIO_THEME_TALK_NUM-1) and RADIO_SUMMARY_FLAG is True:
@@ -193,13 +200,14 @@ class Studio:
                     break
 
                 # まとめをデータベースに挿入
-                self.database.insert_radio_part(self.title, self.title + "_" + str(i), summary)
+                radio_part = RadioPart(video_title=self.title, part_name=self.title + "_" + str(i), talk_theme=summary['theme'], talk_theme_jp=summary['theme_jp'], background_image_pass=summary['background_image_url'])
+                session.add(radio_part)
 
                 # まとめを各ストリーマーにセット
-                [streamer.create_system_prompt_for_radio_summary(summary['theme']) for streamer in self.streamers]
+                [streamer.create_system_prompt_for_radio_summary(radio_part.talk_theme) for streamer in self.streamers]
 
                 # まとめをディレクターにセット
-                self.director.prepare_for_radio_part(i, self.title + "_" + str(i), "今日の振り返り")
+                self.director.prepare_for_radio_part(i, radio_part.part_name, "今日の振り返り")
             else:
                 log.show_message(f"トークテーマ{i+1}を生成中...", newline=True)
                 # トークテーマを生成
@@ -208,13 +216,14 @@ class Studio:
                     break
 
                 # トークテーマをデータベースに挿入
-                self.database.insert_radio_part(self.title, self.title + "_" + str(i), talk_theme)
+                radio_part = RadioPart(video_title=self.title, part_name=self.title + "_" + str(i), talk_theme=talk_theme['theme'], talk_theme_jp=talk_theme['theme_jp'], background_image_pass=talk_theme['background_image_url'])
+                session.add(radio_part)
 
                 # トークテーマを各ストリーマーにセット
-                [streamer.create_system_prompt_for_radio_talk_theme(talk_theme['theme']) for streamer in self.streamers]
+                [streamer.create_system_prompt_for_radio_talk_theme(radio_part.talk_theme) for streamer in self.streamers]
 
                 # トークテーマをディレクターにセット
-                self.director.prepare_for_radio_part(i, self.title + "_" + str(i), talk_theme['theme'])
+                self.director.prepare_for_radio_part(i, radio_part.part_name, radio_part.talk_theme)
 
             # 動画終了に近くなるまでループ
             while extra_rounds > 0:
@@ -226,7 +235,7 @@ class Studio:
                     extra_rounds -= 1  # 残りのループ回数を減らす
                 
                 # カンペを生成
-                cue_card, cue_card_print = self.director.create_cue_card(extra_rounds, self.speak_counter, streamer_toggle, start_flag, end_flag)
+                cue_card, cue_card_print = self.director.create_cue_card(extra_rounds, self.speak_counter)
 
                 # ストリーマーのセリフを生成
                 generate_data = self.streamers[streamer_toggle].speak(self.speak_counter, cue_card=cue_card, partner_message=partner_message)
@@ -243,7 +252,7 @@ class Studio:
                 current_time += generate_data["voice_duration"] + random.uniform(0.5, 1.5)
 
                 # セリフデータをデータベースに挿入
-                self.database.insert_serif(self.title + "_" + str(i), generate_data)
+                Serif.insert_serif(session, radio_part.part_name, generate_data)
                 
                 # ストリーマーを切り替え
                 # streamer_toggle, streamer_change = self._chenge_streamer(streamer_toggle) # 交互じゃないとうまくいかなかったのでコメントアウト
@@ -261,8 +270,10 @@ class Studio:
                 # else:
                 #     partner_message_list.append(generate_data["text"])
                 #     partner_message = ""
+                session.commit()
 
             log.update_dialogue_progress(RADIO_DURATION_SEC, current_time, newline=True)
+        session.close()
     
     def _chenge_streamer(self, streamer_toggle):
         # 確率に基づいて数値を変更するかどうかを決定

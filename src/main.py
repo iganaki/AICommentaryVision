@@ -1,8 +1,8 @@
 import settings
 from static_data import Mode
-from studio import Studio
 
 def main():
+    settings.initialize_project()
     mode = Mode.DUO_RADIO.value
 
     if mode == Mode.DUO_RADIO.value:
@@ -17,8 +17,7 @@ def main():
         video_path       = "D:/douga/kansei/test.mp4"
         # video_path       = "D:/douga/kansei/sv_1202.mp4"
 
-    database, title = settings.set(mode, video_summary=video_summary, video_path=video_path)
-    studio = Studio(database, title)
+    studio = settings.set(mode, video_summary=video_summary, video_path=video_path)
     video_path = studio.create_video()
     
     # 作成した動画ユーザーに返す（未実装）
