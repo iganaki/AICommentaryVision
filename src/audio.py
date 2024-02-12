@@ -1,3 +1,4 @@
+import model
 import uuid
 import wave
 import contextlib
@@ -12,6 +13,11 @@ class VoiceGenerator:
     @staticmethod
     def set_tts():
         VOICEVOX_client().set_data()
+    
+    @staticmethod
+    def is_tts_set():
+        with model.session_scope() as session:
+            return session.query(VoiceVoxSpeaker).count() > 0
 
     def generate_voice_from_text(self, save_falder, file_number, text: str, voicevox_chara, voice_paramater) -> str:
         content, ttsid = self.voicevox_client.generate_voice_from_text(text, voicevox_chara, voice_paramater)
@@ -41,7 +47,6 @@ vv_api_url = 'http://127.0.0.1:50021'  # VOICEVOX Engineのエンドポイント
 class VOICEVOX_client:
     @staticmethod
     def set_data():
-        session = Session()
 
         # 話者情報を取得する
         response = requests.get(f"{vv_api_url}/speakers")
@@ -54,9 +59,8 @@ class VOICEVOX_client:
                 style_name = style["name"]
                 style_id = style["id"]
                 voicevox_speaker = VoiceVoxSpeaker(speaker_name=speaker_name, style_name=style_name, style_id=style_id)
-                session.add(voicevox_speaker)
-        session.commit()
-        session.close()
+                with model.session_scope() as session:
+                    session.add(voicevox_speaker)
 
     def generate_voice_from_text(self, text: str, voicevox_chara, voice_paramater) -> str:
         vvid = self._get_vvid(voicevox_chara, voice_paramater["voice_style"])
@@ -112,11 +116,11 @@ class VOICEVOX_client:
     @staticmethod    
     def get_style_list(speaker_name):
         # 指定されたスピーカーのスタイル名をデータベースから抽出
-        session = Session()
-        filtered_data = session.query(VoiceVoxSpeaker).filter(VoiceVoxSpeaker.speaker_name == speaker_name).all()
-        session.close()
+        with model.session_scope() as session:
+            filtered_data = session.query(VoiceVoxSpeaker).filter(VoiceVoxSpeaker.speaker_name == speaker_name).all()
+            style_list = [speaker.style_name for speaker in filtered_data]
         # スタイル名のリストを返す
-        return [speaker.style_name for speaker in filtered_data]
+        return style_list
 
 
 

@@ -26,7 +26,8 @@ def initialize_project():
         _insert_static_data(session, model_class, data_list)
     
     # TTSの初期化
-    VoiceGenerator.set_tts()
+    if not VoiceGenerator.is_tts_set():
+        VoiceGenerator.set_tts()
     
     session.close()
 

@@ -4,59 +4,91 @@ from math import e
 import os
 from pyexpat import model
 import random
-import re
 import shutil
-from tkinter import N
-import traceback
 from openai import OpenAI
 import requests
 from config import DATA_FOLDER, DEBUG_FLAG, MESSAGE_HISTORY_LIMIT
 import log
-import api_utilities
 
-class OpenAIClient:
-    def __init__(self):
-        self.my_api_key = os.getenv("OPENAI_API_KEY", "")
-        self.client = OpenAI(api_key=self.my_api_key)
-        self.news_titles = []
-        self.words = []
-
-    # 呼ばれるたびに実況文を生成する。
-    def generate_commentary(self, system_prompt, previous_messages, user_prompt_list, capture_base64_list):
-        messages = self._build_messages(system_prompt, previous_messages, user_prompt_list, capture_base64_list)
-
-        if capture_base64_list != None:
+openai_api_key = os.getenv("OPENAI_API_KEY", "")
+openai_client = OpenAI(api_key=openai_api_key)
+class OpenAIClient:    
+    # 実況文を生成する。
+    def generate_commentary(self, system_prompt, previous_messages, user_prompts, capture_base64_images):
+        dummy_texts = ['これはデバッグ用のダミー応答です。いい。改行のテストのため、意図的に長い文章にしています。ご協力感謝します。',
+                      'I\'m sorry, his is a dummy response for debugging. Good. It is intentionally long for testing line breaks. Thank you for your cooperation.',
+                      'これは短いデバッグダミー応答です。']
+        dummy_text = random.choice(dummy_texts)
+        if capture_base64_images:
             gpt_model = "gpt-4-vision-preview"
         else:
             gpt_model = "gpt-4-turbo-preview"
 
+        commentary = self._generate_text(system_prompt, gpt_model, previous_messages=previous_messages, 
+                                         user_prompts=user_prompts, capture_base64_images=capture_base64_images, 
+                                         dummy_text=dummy_text)
+        return commentary
+
+    # カンペ文を生成する
+    def generate_cue(self, system_prompt, user_prompt):
+        dummy_texts = ['相方のうっかりエピソードを話して', '最近会ったうれしいことを話して', 'ここでボケて']
+        dummy_text = random.choice(dummy_texts)
+        gpt_model = "gpt-4-turbo-preview"
+        cue = self._generate_text(system_prompt, gpt_model, user_prompts=[user_prompt], dummy_text=dummy_text)
+        return cue
+        
+    # ラジオのトークテーマを生成する
+    def generate_talk_theme(self, system_prompt, user_prompt):
+        dummy_texts = ['月に行ったら何したい？', '最近の夢を教えて', 'お風呂でどこから洗う？']
+        dummy_text = random.choice(dummy_texts)
+        gpt_model = "gpt-4-turbo-preview"
+        talk_theme = self._generate_text(system_prompt, gpt_model, user_prompts=[user_prompt], dummy_text=dummy_text)
+        return talk_theme
+
+    # ラジオのトークの要約を生成する
+    def generate_radio_summary(self, serif_texts):
+        summarys = ""
+        # トークを見どころを残したまま200文字以内で要約してください。      
+        system_prompt = f'''
+            Please summarize the talk in 200 characters, leaving the highlights of the talk.
+        '''
+        gpt_model = "gpt-4-turbo-preview"
+        for index, serif_text in enumerate(serif_texts, start=1):
+            dummy_text = f"{index}個めのトークまとめだよー！"
+            summary = self._generate_text(system_prompt, gpt_model, user_prompts=[serif_text], dummy_text=dummy_text)
+            summarys += f"{index}個めのトーク：" + summary + "\n"
+        return summarys
+    
+    # ラジオへのリスナーからのおたよりを生成する
+    def generate_lerrer_from_listener(self, system_prompt, user_prompt):
+        gpt_model = "gpt-4-turbo-preview"
+        dummy_text = "こんにちは、いつも楽しくラジオを聞かせていただいています。"
+        letter = self._generate_text(system_prompt, gpt_model, user_prompts=[user_prompt], dummy_text=dummy_text)
+        return letter
+
+    def _generate_text(self, system_prompt, gpt_model, max_tokens=300, temperature=0.7, 
+                      previous_messages=[], user_prompts=[], capture_base64_images=[], dummy_text="これはデバッグ用のダミー応答です。"):
+        messages = self._build_messages(system_prompt, previous_messages=previous_messages, 
+                                        user_prompts=user_prompts, capture_base64_images=capture_base64_images)
         if DEBUG_FLAG:
-            contents = ['これはデバッグ用のダミー応答です。いい。改行のテストのため、意図的に長い文章にしています。ご協力感謝します。',
-                        'I\'m sorry, his is a dummy response for debugging. Good. It is intentionally long for testing line breaks. Thank you for your cooperation.',
-                        'これはデバッグ用のダミー応答です。いい。改行のテストのため、意図的に長い文章にしています。ご協力感謝します。']
-
-            content = random.choice(contents)
-
-            response = {"choices": [{"message": {"content": content}}]}
-            new_assistant_message = {"role": "assistant", "content": response["choices"][0]["message"]["content"]}
+            text = dummy_text
         else:
             try:
-                response = self.client.chat.completions.create(
+                response = openai_client.chat.completions.create(
                     model=gpt_model,
                     messages=messages,
-                    max_tokens=300,
-                    temperature=0.7,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
                 )
             except Exception as e:
-                log.handle_api_error(e, "GPT4 API呼び出し中にエラーが発生しました", capture_base64=capture_base64_list, user_prompt=user_prompt_list)
+                log.handle_api_error(e, "GPT4 API呼び出し中にエラーが発生しました", system_prompt=system_prompt, gpt_model=gpt_model, user_prompts=user_prompts)
                 return None
-            content = response.choices[0].message.content
-            new_assistant_message = {"role": "assistant", "content": content}
+            text = response.choices[0].message.content
 
-        return new_assistant_message["content"]
+        return text
 
     # OpenAI APIに渡すメッセージを組み立てる
-    def _build_messages(self, system_prompt, previous_messages=[], user_prompt_list=[], capture_base64_list=[], assistant_prompt_list=[]):
+    def _build_messages(self, system_prompt, previous_messages=[], user_prompts=[], capture_base64_images=[], assistant_prompts=[]):
         # システムプロンプト付加
         messages = [{"role": "system", "content": system_prompt}]
         
@@ -64,14 +96,14 @@ class OpenAIClient:
         messages.extend(previous_messages)
 
         # ユーザープロンプトリストがあれば付加
-        if user_prompt_list != []:
+        if user_prompts != []:
             # capture_base64 リスト内の各要素に対する画像データの辞書を作成
             image_dicts = []
-            if capture_base64_list:
-                image_dicts = [{"type": "image_url", "image_url": f"data:image/jpeg;base64,{base64_string}"} for base64_string in capture_base64_list]
+            if capture_base64_images:
+                image_dicts = [{"type": "image_url", "image_url": f"data:image/jpeg;base64,{base64_string}"} for base64_string in capture_base64_images]
 
             # ユーザープロンプトを追加
-            content = [{"type": "text", "text": user_prompt_list[0]}] + image_dicts
+            content = [{"type": "text", "text": user_prompts[0]}] + image_dicts
 
             # content を含むメッセージを追加
             messages.append({
@@ -79,15 +111,15 @@ class OpenAIClient:
                 "content": content
             })
 
-            if len(user_prompt_list) > 1:
-                for prompt in user_prompt_list[1:]:
+            if len(user_prompts) > 1:
+                for prompt in user_prompts[1:]:
                     # ここで各プロンプトに対して行いたい処理を実行
                     messages.append({
                         "role": "user",
                         "content": [{"type": "text", "text": prompt}]
                     })
 
-        for prompt in assistant_prompt_list:
+        for prompt in assistant_prompts:
             messages.append({
                 "role": "assistant",
                 "content": prompt
@@ -95,7 +127,7 @@ class OpenAIClient:
 
         return messages
     
-    def create_voice_paramater(self, text, style_list):
+    def generate_voice_paramater(self, text, style_list):
         messages = self._create_voice_paramater_prompt(text, style_list)
         #ダミー回答
         if len(style_list) >= 3:
@@ -111,24 +143,7 @@ class OpenAIClient:
         # gpt_model = "gpt-4-turbo-preview"
         gpt_model = "gpt-3.5-turbo-1106"
 
-        if DEBUG_FLAG:
-            return normal_ret
-        else:
-            try:
-                response = self.client.chat.completions.create(
-                    model=gpt_model,
-                    response_format={"type": "json_object"},
-                    messages=messages
-                )
-                try:
-                    voice_paramater = json.loads(response.choices[0].message.content)
-                except json.JSONDecodeError:
-                    log.handle_api_error(e, "JSONモードの戻り値がJSON形式ではありませんでした。", text=text, voice_paramater=response.choices[0].message.content)
-                    return normal_ret
-
-            except Exception as e:
-                log.handle_api_error(e, "GPT3.5 API呼び出し中にエラーが発生しました", text=text)
-                return normal_ret
+        voice_paramater = self._generate_json(messages, gpt_model, normal_ret)
 
         return voice_paramater
 
@@ -145,159 +160,31 @@ class OpenAIClient:
             {{voice_emotion:, voice_speed:, voice_pitch:, voice_style:}}
         '''
         user_prompt = f"{text}"
-        messages = self._build_messages(system_prompt, user_prompt_list=[user_prompt])
+        messages = self._build_messages(system_prompt, user_prompts=[user_prompt])
         return messages
-
-    @staticmethod
-    def classify_text(text, categories):
-        # カテゴリのリストが空の場合、Noneを返す
-        if not categories:
-            return None
-
-        # 各カテゴリに対してテキストをチェックする
-        for category in categories:
-            if category in text:
-                return category
-
-        # テキストに一致するカテゴリがない場合は、カテゴリリストの最初の要素を返す
-        return categories[0]
     
-    @staticmethod
-    def update_previous_messages(previous_messages, assistant_message, partner_message=""):
-        if partner_message != "":
-            if isinstance(partner_message, list):
-                for message in partner_message:
-                    previous_messages.append({"role": "user", "content": message})
-            elif isinstance(partner_message, str):
-                previous_messages.append({"role": "user", "content": partner_message})
-        previous_messages.append({"role": "assistant", "content": assistant_message})
-        if len(previous_messages) > MESSAGE_HISTORY_LIMIT:
-            previous_messages = previous_messages[-MESSAGE_HISTORY_LIMIT:]
-        
-        return previous_messages
-    
-    def generate_cue(self, system_prompt, user_prompt):
-        messages = self._build_messages(system_prompt=system_prompt, user_prompt_list=[user_prompt])
-
-        gpt_model = "gpt-4-turbo-preview"
-
-        if DEBUG_FLAG:
-            # カンペのリスト
-            cues = ['相方のうっかりエピソードを話して', '最近会ったうれしいことを話して', 'ここでボケて']
-
-            # ランダムにカンペを選択
-            content = random.choice(cues)
-        else:
+    def _generate_json(self, messages, gpt_model, dummy_json):
+        ret_json = dummy_json
+        if not DEBUG_FLAG:
             try:
-                response = self.client.chat.completions.create(
+                response = openai_client.chat.completions.create(
                     model=gpt_model,
-                    messages=messages,
-                    max_tokens=300,
-                    temperature=0.7,
+                    response_format={"type": "json_object"},
+                    messages=messages
                 )
-            except Exception as e:
-                log.handle_api_error(e, "GPT4 API呼び出し中にエラーが発生しました", system_prompt=system_prompt, user_prompt=user_prompt)
-                return 'normal'
-            content = response.choices[0].message.content
-
-        return content
-    
-    # ラジオのトークテーマを生成する
-    def generate_talk_theme(self):
-        messages = self._create_talk_theme_prompt()
-
-        gpt_model = "gpt-4-turbo-preview"
-
-        if DEBUG_FLAG:
-            # ランダムにテーマを選択
-            talk_themes = ['月に行ったら何したい？', '最近の夢を教えて', 'お風呂でどこから洗う？']
-            content = random.choice(talk_themes)
-        else:
-            try:
-                response = self.client.chat.completions.create(
-                    model=gpt_model,
-                    messages=messages,
-                    max_tokens=300,
-                    temperature=0.7,
-                )
-            except Exception as e:
-                log.handle_api_error(e, "トークテーマ生成中にエラーが発生しました", gpt_model=gpt_model)
-                return None
-            content = response.choices[0].message.content
-        return content
-
-    def _create_talk_theme_prompt(self):
-        if DEBUG_FLAG == True:
-            random_news = "『ヘルダイバー2』先行レビュー。PvEに挑み続けるワイワーーーーイ系協力型TPS。コマンド入力で支援を呼び、エイリアンどもに“500kg”の爆弾を落とせ!! - ファミ通.com"
-            random_word = "hellllllll"
-        else:
-            # ランダムなニュースを取得
-            if not self.news_titles:
-                self.news_titles = api_utilities.fetch_random_news()
-
-            random_news = random.choice(self.news_titles)
-
-            # 取得したニュースを削除
-            self.news_titles.remove(random_news)
-
-            # ランダムな単語を取得
-            # random_word = api_utilities.fetch_random_word()
-            if not self.words:
-                self.words = api_utilities.fetch_random_wiki_word()
-            random_word = random.choice(self.words)
-
-            # 取得した単語を削除
-            self.words.remove(random_word)
-
-        # ランダムに与えられたニュースと単語を使用して、日本語で20文字程度のラジオのトークテーマを作成してください。
-        system_prompt = f'''
-            Please create a radio talk theme in Japanese, about 20 characters long, using randomly given news and words. Avoid names of living persons. Make it a general theme that is easy to talk about.
-        '''
-        user_prompt = f'''
-            news: {random_news}
-            word: {random_word}
-        '''
-        messages = self._build_messages(system_prompt=system_prompt, user_prompt_list=[user_prompt])
-
-        log.show_message(f"news_titles_len={len(self.news_titles)}, random_news={random_news}, random_word={random_word}", newline=True)
-
-        return messages
-
-    def generate_radio_summary(self, serif_texts):
-        summary = ""
-        # トークを見どころを残したまま要約してください。        
-        system_prompt = f'''
-            Please summarize while leaving the highlights.
-        '''
-        for index, serif_text in enumerate(serif_texts, start=1):
-            messages = self._build_messages(system_prompt=system_prompt, user_prompt_list=[serif_text])
-
-            gpt_model = "gpt-4-turbo-preview"
-
-            if DEBUG_FLAG:
-                content = f"{index}個めのトークまとめだよー！"
-                summary += content + "\n"
-            else:
                 try:
-                    response = self.client.chat.completions.create(
-                        model=gpt_model,
-                        messages=messages,
-                        max_tokens=300,
-                        temperature=0.7,
-                    )
-                except Exception as e:
-                    log.handle_api_error(e, "トークまとめ作成中にエラーが発生しました", gpt_model=gpt_model, messages=messages)
-                    return None
-                content = response.choices[0].message.content
+                    ret_json = json.loads(response.choices[0].message.content)
+                except json.JSONDecodeError:
+                    log.handle_api_error(e, "JSONモードの戻り値がJSON形式ではありませんでした。", gpt_model=gpt_model, messages=messages)
 
-            summary += f"{index}個めのトーク：" + content + "\n"
-
-        return summary
+            except Exception as e:
+                log.handle_api_error(e, "GPT JSONモード呼び出し中にエラーが発生しました", gpt_model=gpt_model, messages=messages)
+        return ret_json
 
     def generate_background_image(self, talk_theme, output_path, image_title):
         def try_generate_image(prompt):
             try:
-                response = self.client.images.generate(
+                response = openai_client.images.generate(
                     model="dall-e-3",
                     prompt=prompt,
                     size="1792x1024",
@@ -384,5 +271,17 @@ class OpenAIClient:
             '''
 
         return prompt
-
-
+    
+    @staticmethod
+    def update_previous_messages(previous_messages, assistant_message, partner_message=""):
+        if partner_message != "":
+            if isinstance(partner_message, list):
+                for message in partner_message:
+                    previous_messages.append({"role": "user", "content": message})
+            elif isinstance(partner_message, str):
+                previous_messages.append({"role": "user", "content": partner_message})
+        previous_messages.append({"role": "assistant", "content": assistant_message})
+        if len(previous_messages) > MESSAGE_HISTORY_LIMIT:
+            previous_messages = previous_messages[-MESSAGE_HISTORY_LIMIT:]
+        
+        return previous_messages

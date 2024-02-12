@@ -2,11 +2,13 @@ from calendar import c
 import random
 from abc import ABC, abstractmethod
 from requests import session
-from config import AI_DIRECTOR_MODE, MAX_EXTRA_ROUNDS, RADIO_THEME_TALK_NUM, Session
+from config import AI_DIRECTOR_MODE, DEBUG_FLAG, MAX_EXTRA_ROUNDS, RADIO_THEME_TALK_NUM, Session
 from model import CueCard, Serif, TalkTheme
 from static_data import Mode, Role
 from openai_client  import OpenAIClient 
 import model
+import log
+import api_utilities
 
 def create_director_instance(mode, *args, **kwargs):
     """
@@ -26,7 +28,6 @@ def create_director_instance(mode, *args, **kwargs):
 
 class Director(ABC):
     def __init__(self):
-        super().__init__()
         # コメンタリージェネレータの初期化
         self.commentary_generator = OpenAIClient()
 
@@ -126,6 +127,9 @@ class Director(ABC):
         
     
 class GameStreamDirector(Director):
+    def __init__(self):
+        super().__init__()
+
     def prepare_for_gameStream(self, video_title, video_summary):
         self.title = video_title
         self.video_summary = video_summary
@@ -162,6 +166,11 @@ class GameStreamDirector(Director):
         return user_prompt
     
 class RadioDirector(Director):
+    def __init__(self):
+        super().__init__()
+        self.news_titles = []
+        self.words = []
+
     def prepare_for_radio_part(self, index, part_name, part_theme):
         self.radio_part_index = index
         self.title = part_name
@@ -259,10 +268,46 @@ class RadioDirector(Director):
 
     def _generate_ai_talk_theme(self):
         talk_theme = {}
-        talk_theme['theme'] = self.commentary_generator.generate_talk_theme()
+        system_prompt, user_prompt = self._create_talk_theme_prompt()
+        talk_theme['theme'] = self.commentary_generator.generate_talk_theme(system_prompt, user_prompt)
         talk_theme['theme_jp'] = talk_theme['theme']
         return talk_theme
 
+    def _create_talk_theme_prompt(self):
+        if DEBUG_FLAG == True:
+            random_news = "『ヘルダイバー2』先行レビュー。PvEに挑み続けるワイワーーーーイ系協力型TPS。コマンド入力で支援を呼び、エイリアンどもに“500kg”の爆弾を落とせ!! - ファミ通.com"
+            random_word = "hellllllll"
+        else:
+            # ランダムなニュースを取得
+            if not self.news_titles:
+                self.news_titles = api_utilities.fetch_random_news()
+
+            random_news = random.choice(self.news_titles)
+
+            # 取得したニュースを削除
+            self.news_titles.remove(random_news)
+
+            # ランダムな単語を取得
+            # random_word = api_utilities.fetch_random_word()
+            if not self.words:
+                self.words = api_utilities.fetch_random_wiki_word()
+            random_word = random.choice(self.words)
+
+            # 取得した単語を削除
+            self.words.remove(random_word)
+
+        log.show_message(f"news_titles_len={len(self.news_titles)}, random_news={random_news}, random_word={random_word}", newline=True)
+
+        # ランダムに与えられたニュースと単語を使用して、日本語で20文字程度のラジオのトークテーマを作成してください。
+        system_prompt = f'''
+            Please create a radio talk theme in Japanese, about 20 characters long, using randomly given news and words. Avoid names of living persons. Make it a general theme that is easy to talk about.
+        '''
+        user_prompt = f'''
+            news: {random_news}
+            word: {random_word}
+        '''
+        return system_prompt, user_prompt
+    
     def create_summary(self, output_path, title):
         if  AI_DIRECTOR_MODE is True:
             # AIでトークテーマを生成

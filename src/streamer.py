@@ -48,6 +48,11 @@ class Streamer:
         'duo_radio_guest': '''
             As a popular radio personality, you're co-hosting a radio show with me. Keep your responses to one sentence under 80 characters, only including content relevant to the comment. As a guest speaker, engage by nodding to my stories, asking questions, and sharing your thoughts. If the conversation becomes repetitive, shift the direction by revisiting the theme or sharing an unrelated story. You don't always have to agree with me; arguing or questioning can make the radio more interesting. Remember, the cue cards are invisible to listeners; please react naturally.
         ''',
+        ## ラジオホスト（うそつき）
+        # あなたはラジオの人気パーソナリティーとして、私と共にラジオ番組を進行しています。 
+        # 
+
+        ## ラジオホスト（安眠）
 
     }
 
@@ -72,13 +77,13 @@ class Streamer:
         self.log = log
 
     # 実況文を生成する
-    def speak(self, file_number, capture_base64_list = None, cue_card = "", partner_message=""):
+    def speak(self, file_number, capture_base64_images = None, cue_card = "", partner_message=""):
         # システムプロンプトの設定
         scenario = self._select_scenario(partner_message, cue_card)
         system_prompt = self._create_system_prompt(scenario)
         # ユーザープロンプトの作成
-        user_prompt_list = self._create_user_prompt(partner_message, cue_card)
-        for prompt in user_prompt_list:
+        user_prompts = self._create_user_prompt(partner_message, cue_card)
+        for prompt in user_prompts:
             if prompt != partner_message:
                 self.log.write_to_log_file("user_prompt", prompt)
         
@@ -86,7 +91,7 @@ class Streamer:
         max_retries = 3  # 再試行の最大回数
         retry_num = -1
         for _ in range(max_retries):
-            commentary_text = self.commentary_generator.generate_commentary(system_prompt, self.previous_messages, user_prompt_list, capture_base64_list)
+            commentary_text = self.commentary_generator.generate_commentary(system_prompt, self.previous_messages, user_prompts, capture_base64_images)
             retry_num += 1
             if commentary_text is None or not self._is_gpt_english_response(commentary_text):
                 break
@@ -103,7 +108,7 @@ class Streamer:
         self.previous_messages = OpenAIClient.update_previous_messages(self.previous_messages, commentary_text, partner_message)
 
         # 実況文から音声を生成し、その長さを取得
-        voice_paramater = self.commentary_generator.create_voice_paramater(commentary_text, self.voice_generator.get_style_list(self.streamer_profile.voicevox_chara))
+        voice_paramater = self.commentary_generator.generate_voice_paramater(commentary_text, self.voice_generator.get_style_list(self.streamer_profile.voicevox_chara))
         self.log.write_to_log_file("ボイスパラメータ", str(voice_paramater))  # ログにボイスパラメータを記録
         voice_data = self.voice_generator.generate_voice_from_text(self.save_folder, file_number, commentary_text, self.streamer_profile.voicevox_chara, voice_paramater)
         voice_duration = VoiceGenerator.get_audio_duration(voice_data)
@@ -196,17 +201,17 @@ class Streamer:
         :param cue_card: スタッフからのメッセージ（カンペ）。
         :return: LLMに読ませるためのuserプロンプトリスト。
         """
-        user_prompt_list = []
+        user_prompts = []
         if partner_message != "":           
             if isinstance(partner_message, list):
                 # リストの場合、末尾に結合
-                user_prompt_list.extend(partner_message)
+                user_prompts.extend(partner_message)
             elif isinstance(partner_message, str):
                 # 文字列の場合、末尾に追加
-                user_prompt_list.append(partner_message)
+                user_prompts.append(partner_message)
         
         if cue_card:
-            user_prompt_list.append(f"[Cue Card from Staff]{cue_card}")
+            user_prompts.append(f"[Cue Card from Staff]{cue_card}")
 
-        return user_prompt_list
+        return user_prompts
 
