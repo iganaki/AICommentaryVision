@@ -26,10 +26,18 @@ def write_error_log(text):
     with open(current_log_file, 'w', encoding='utf-8') as file:
         file.write(text)
 
-# 進捗を表示
-def update_dialogue_progress(total_duration_sec, current_time, newline):
+# 時間が決まっている場合の進捗を表示
+def update_dialogue_progress_sec(total_duration_sec, current_time, newline):
     progress_percentage = (current_time / total_duration_sec) * 100
     show_message("Progress: {:.2f}% ({:.2f}秒/{:.2f}秒)".format(progress_percentage, current_time, total_duration_sec), newline=newline)
+
+# 回数が決まっている場合の進捗を表示
+def update_dialogue_progress_num(total_rounds, current_round, newline, full_time=None):
+    progress_percentage = (current_round / total_rounds) * 100
+    if full_time:
+        show_message("Progress: {:.2f}% ({}/{}) - 処理時間: {:.2f}秒".format(progress_percentage, current_round, total_rounds, full_time), newline=newline)
+    else:
+        show_message("Progress: {:.2f}% ({}/{})".format(progress_percentage, current_round, total_rounds), newline=newline)
 
 # 任意のメッセージを表示
 def show_message(message, newline=False):

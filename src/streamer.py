@@ -1,5 +1,8 @@
-from cgi import print_arguments
+from copy import deepcopy
+import random
 import re
+
+from sqlalchemy import between
 from audio import VoiceGenerator
 from log import Log
 from model import StreamerProfile
@@ -56,31 +59,31 @@ class Streamer:
 
     }
 
-    def __init__(self, streamer_profile: StreamerProfile):
+    def __init__(self, streamer_profile: StreamerProfile, debug_mode=True):
         # コメンタリージェネレータとボイスジェネレータの初期化
-        self.commentary_generator = OpenAIClient()
+        self.ai_generator = OpenAIClient(debug_mode)
         self.voice_generator = VoiceGenerator()
         
         # ナレーターのプロファイルの設定
-        self.streamer_profile = streamer_profile
+        self.streamer_profile = deepcopy(streamer_profile)
         
         # 過去のメッセージ履歴を格納するリストの初期化
         self.previous_messages = []
+        
+        self.additional_prompt = None
 
     def get_profile(self):
         return self.streamer_profile
 
     # 動画作成前にストリーマーが準備する
-    def prepare_for_streaming(self, save_folder, log: Log, video_summary):
-        self.video_summary = video_summary
+    def prepare_for_streaming(self, save_folder, log: Log):
         self.save_folder = save_folder
         self.log = log
 
     # 実況文を生成する
-    def speak(self, file_number, capture_base64_images = None, cue_card = "", partner_message=""):
-        # システムプロンプトの設定
-        scenario = self._select_scenario(partner_message, cue_card)
-        system_prompt = self._create_system_prompt(scenario)
+    def speak(self, file_number, system_prompt, capture_base64_images = None, cue_card = "", partner_message="", start_time_sec=0.0):
+        system_prompt = self._create_system_prompt(system_prompt)
+        self.log.write_to_log_file("system_prompt", f"{file_number}:{system_prompt}") # ログにシステムプロンプトを記録
         # ユーザープロンプトの作成
         user_prompts = self._create_user_prompt(partner_message, cue_card)
         for prompt in user_prompts:
@@ -91,7 +94,7 @@ class Streamer:
         max_retries = 3  # 再試行の最大回数
         retry_num = -1
         for _ in range(max_retries):
-            commentary_text = self.commentary_generator.generate_commentary(system_prompt, self.previous_messages, user_prompts, capture_base64_images)
+            commentary_text = self.ai_generator.generate_commentary(system_prompt, self.previous_messages, user_prompts, capture_base64_images)
             retry_num += 1
             if commentary_text is None or not self._is_gpt_english_response(commentary_text):
                 break
@@ -103,26 +106,40 @@ class Streamer:
             return {
                 'text': commentary_text
             }
+        
+        # 実況文の不完全な文を削除し、70文字以内に分割
+        commentary_text, split_commentary_texts = self._split_and_reflow_text_preserving_quotes(commentary_text)
 
         # メッセージ履歴の更新
         self.previous_messages = OpenAIClient.update_previous_messages(self.previous_messages, commentary_text, partner_message)
 
-        # 実況文から音声を生成し、その長さを取得
-        voice_paramater = self.commentary_generator.generate_voice_paramater(commentary_text, self.voice_generator.get_style_list(self.streamer_profile.voicevox_chara))
-        self.log.write_to_log_file("ボイスパラメータ", str(voice_paramater))  # ログにボイスパラメータを記録
-        voice_data = self.voice_generator.generate_voice_from_text(self.save_folder, file_number, commentary_text, self.streamer_profile.voicevox_chara, voice_paramater)
-        voice_duration = VoiceGenerator.get_audio_duration(voice_data)
+        # 実況文リストから感情、音声を生成し、その長さを取得
+        generate_split_serif_data = []
+        total_voice_duration = 0.0
+        for split_commentary_text in split_commentary_texts:
+            voice_paramater = self.ai_generator.generate_voice_paramater(split_commentary_text, self.voice_generator.get_style_list(self.streamer_profile.tts_chara))
+            self.log.write_to_log_file("ボイスパラメータ", str(voice_paramater))
+            voice_data = self.voice_generator.generate_voice_from_text(self.save_folder, file_number, split_commentary_text, self.streamer_profile.tts_chara, voice_paramater)
+            voice_duration = VoiceGenerator.get_audio_duration(voice_data)
+            between_time = random.uniform(0.1, 0.3)
+            total_voice_duration += voice_duration + between_time
+            generate_split_serif_data.append({
+                'text': split_commentary_text,
+                'voice_data': voice_data,
+                'voice_duration': voice_duration,
+                'emotion': voice_paramater["voice_emotion"],
+                'start_time_sec': start_time_sec
+            })
+            start_time_sec += voice_duration + between_time
 
         # 辞書形式で結果を返却
         return {
             'name': self.streamer_profile.name,
-            'voicevox_chara': self.streamer_profile.voicevox_chara,
+            'tts_chara': self.streamer_profile.tts_chara,
             'color': self.streamer_profile.color,
             'text': commentary_text,
-            'emotion': voice_paramater["voice_emotion"],
-            'voice': voice_data,
-            'voice_duration': voice_duration
-        }
+            'voice_duration': total_voice_duration,
+        }, generate_split_serif_data
     
     def _is_gpt_english_response(self, response_text):
         """
@@ -140,58 +157,32 @@ class Streamer:
     def reset_previous_messages(self):
         self.previous_messages = []
 
-    # システムプロンプトにラジオトークテーマを追加する
-    def create_system_prompt_for_radio_talk_theme(self, radio_talk_theme):
+    def create_additional_system_prompt(self, additional_prompt_tag, additional_prompt_text):
         self.additional_prompt = f'''
-            radio talk theme:
-                {radio_talk_theme}
+            {additional_prompt_tag}:
+                {additional_prompt_text}
         '''
 
-    # システムプロンプトにラジオまとめを追加する
-    def create_system_prompt_for_radio_summary(self, radio_summary):
-        # 私たちは現在、ラジオ全体のエンディングを録っています。以下は今日行ったラジオの会話の要約です。以下を見て今日のラジオの振り返りをしてください。
-        self.additional_prompt = f'''
-            We are currently recording the overall ending for the radio. Below is a summary of the radio conversations we had today. Please review today's radio session based on the information below.
-            {radio_summary}
-        '''
-
-    def _create_system_prompt(self, scenario):
-        system_prompt = self.SPEAK_PROMPTS[scenario]
+    def _create_system_prompt(self, system_prompt):
         # 実況者（あなた）の情報:
         #   名前: 
         #   性格特徴: 
         #   言葉遣い: 
         system_prompt += f'''
-            Commentator (You) Information:
-            Name: {self.streamer_profile.name}
-            Personality traits: {self.streamer_profile.personality}
-            Speaking style: {self.streamer_profile.speaking_style}
+Commentator (You) Information:
+Name: {self.streamer_profile.name}
+Personality: {self.streamer_profile.personality}
+Speaking style: {self.streamer_profile.speaking_style}
         '''
         if self.streamer_profile.partner_name != "":
-            #   役割: 
             #   私の名前: 
-            #   私たちの関係: 
             system_prompt += f'''
-                role: {self.streamer_profile.your_role}
                 My Name: {self.streamer_profile.partner_name}
-                Our relationship: {self.streamer_profile.our_relationship}
             '''
         if self.additional_prompt:
             system_prompt += self.additional_prompt
 
         return system_prompt
-
-    def _select_scenario(self, partner_message, cue_card):
-        if self.streamer_profile.role == Role.DUO_GAME_PLAYER.value:
-            return 'duo_game_player'
-        elif self.streamer_profile.role == Role.DUO_GAME_COMMENTATOR.value:
-            return 'duo_game_commentator'
-        elif self.streamer_profile.role == Role.DUO_RADIO_HOST.value:
-            return 'duo_radio_host'
-        elif self.streamer_profile.role == Role.DUO_RADIO_GUEST.value:
-            return 'duo_radio_guest'
-        else:
-            raise ValueError(f"Invalid role: {self.streamer_profile.role}")
 
     def _create_user_prompt(self, partner_message, cue_card):
         """
@@ -215,3 +206,50 @@ class Streamer:
 
         return user_prompts
 
+    def _split_and_reflow_text_preserving_quotes(self, text, max_length=70):
+        text_with_placeholders, placeholders = self.replace_quotes_with_placeholders(text)
+        
+        # 文末記号で分割する
+        sentences = re.split(r'(?<=[。？！])\s*', text_with_placeholders)
+        # 最後の文が完全な文かどうかをチェックする
+        if sentences[-1] and not re.search(r'[。？！]$', sentences[-1]):
+            sentences = sentences[:-1]
+        
+        # 分割後、プレースホルダーを元の引用文に戻す
+        sentences_with_quotes = [self.reinsert_quotes(sentence, placeholders) for sentence in sentences]
+        
+        # 文章を再構成する
+        ret_sentence = ''.join(sentences_with_quotes)
+
+        # 文字数で区切り直しの処理を行う
+        processed_sentences = []
+        temp_sentence = ""
+        for sentence in sentences_with_quotes:
+            if len(temp_sentence) + len(sentence) <= max_length:
+                temp_sentence += sentence
+            else:
+                if temp_sentence:
+                    processed_sentences.append(temp_sentence)
+                temp_sentence = sentence
+        # 最後の文を追加する
+        if temp_sentence:
+            processed_sentences.append(temp_sentence)
+        
+        return ret_sentence, processed_sentences
+    
+    def replace_quotes_with_placeholders(self, text):
+        # 引用符で囲まれた部分を一時的にプレースホルダーに置き換える
+        placeholders = []
+        def placeholder(match):
+            placeholders.append(match.group(0))
+            return f"PLACEHOLDER_{len(placeholders) - 1}"
+
+        quoted_text_pattern = r'「[^」]*」'
+        text_with_placeholders = re.sub(quoted_text_pattern, placeholder, text)
+        return text_with_placeholders, placeholders
+
+    def reinsert_quotes(self, text, placeholders):
+        # プレースホルダーを元の引用文に戻す
+        for i, quote in enumerate(placeholders):
+            text = text.replace(f"PLACEHOLDER_{i}", quote)
+        return text

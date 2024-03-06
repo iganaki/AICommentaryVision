@@ -1,280 +1,205 @@
-from calendar import c
+from copy import deepcopy
+import os
 import random
-from abc import ABC, abstractmethod
-from requests import session
-from config import AI_DIRECTOR_MODE, DEBUG_FLAG, MAX_EXTRA_ROUNDS, RADIO_THEME_TALK_NUM, Session
-from model import CueCard, Serif, TalkTheme
-from static_data import Mode, Role
+from re import L
+from config import DATA_FOLDER
+from model import CueSheet, ProgramType, Serif, StaticSection, SerifSystemPrompt, Video, VideoSection
 from openai_client  import OpenAIClient 
 import model
 import log
 import api_utilities
+from static_data import SERIF_SYSTEM_PROMPT_MAIN, Role
 
-def create_director_instance(mode, *args, **kwargs):
-    """
-    GameStreamDirector または RadioDirector のインスタンスを作成する。
-
-    :param mode: class Mode(Enum)のいずれかを指定。
-    :param args: コンストラクタに渡す引数。
-    :param kwargs: コンストラクタに渡すキーワード引数。
-    :return: 指定されたタイプの Director インスタンス。
-    """
-    if mode == Mode.SOLO_GAMEPLAY.value or mode == Mode.DUO_GAMEPLAY.value:
-        return GameStreamDirector(*args, **kwargs)
-    elif mode == Mode.DUO_RADIO.value:
-        return RadioDirector(*args, **kwargs)
-    else:
-        raise ValueError("Invalid mode")
-
-class Director(ABC):
-    def __init__(self):
-        # コメンタリージェネレータの初期化
-        self.commentary_generator = OpenAIClient()
-
-    # 動画作成前にディレクターが準備する
-    def prepare_for_streaming(self, streamers):
-        self.streamers = streamers
-        self.cue_interval = random.randint(8, 12)
-        self.next_cue, self.next_cue_print = "", ""
-        self.continue_counter = 3
-        if AI_DIRECTOR_MODE == True:
-            self.systemprompt = self._create_cue_system_prompt()
-        else:
-            session = Session()
-            self.cue_cards = session.query(CueCard).all()
-            self.temp_cue_cards = self.cue_cards
-            session.close()
-
-    def create_cue_card(self, extra_rounds, counter):
-        cue_card, cue_card_print = "", ""
-        
-        if self.cue_interval > 0:
-            self.cue_interval -= 1
-
-        # 最初の一言目のカンペを出す
-        cue_card, cue_card_print = self._generate_starting_cue(counter)
-
-        # 動画終了時のカンペを出す。
-        if extra_rounds < MAX_EXTRA_ROUNDS and cue_card == "":
-            cue_card, cue_card_print = self._generate_ending_cue(extra_rounds)
-        
-        # 連続したカンペがある場合、出す。
-        if self.next_cue != "" and cue_card == "":
-            cue_card, cue_card_print = self.next_cue, self.next_cue_print
-            self.next_cue, self.next_cue_print = "", ""
-
-        # カンペを継続して出す
-        if self.continue_counter < 3 and cue_card == "":
-            if AI_DIRECTOR_MODE == True:
-                cue_card, cue_card_print = f"(the instructions mentioned in the statement {self.continue_counter} items back)"+self.current_cue, self.current_cue_print
-                self.continue_counter += 1
-
-        # カンペを出す。
-        if self.cue_interval == 0 and cue_card == "":
-            if AI_DIRECTOR_MODE == True:
-                # AIディレクターがカンペを出す
-                cue_card, cue_card_print = self._generate_ai_directed_cue()
-            else:
-                # ランダムディレクターがカンペを出す。
-                cue_card, cue_card_print = self._generate_random_cue()
-            
-            self.current_cue, self.current_cue_print = cue_card, cue_card_print
-            self.cue_interval = random.randint(8, 14)
-            self.continue_counter = 0
-
-        return cue_card, cue_card_print
-    
-    @abstractmethod
-    def _generate_starting_cue(self):
-        pass
-
-    @abstractmethod
-    def _generate_ending_cue(self, extra_rounds):
-        pass
-         
-    def _generate_ai_directed_cue(self):
-        # 今までの会話をデータベースから取り出す
-        user_prompt = self._create_cue_user_prompt()
-        # AIディレクターがカンペを生成
-        cue_card = self.commentary_generator.generate_cue(self.systemprompt, user_prompt)
-        return cue_card, cue_card
-
-    def _generate_random_cue(self):
-        # カンペカードが存在しない場合は処理を終了
-        if not self.temp_cue_cards:
-            return "", ""
-
-        # ランダムにカンペカードを選択
-        selected_cue_card = random.choice(self.temp_cue_cards)
-        self.next_cue, self.next_cue_print = selected_cue_card.next_cue, selected_cue_card.next_cue_print
-
-        # 選択されたカンペカードをリストから削除
-        self.temp_cue_cards.remove(selected_cue_card)
-
-        # カンペカードリストがなくなったら補充
-        if not self.temp_cue_cards:
-            self.temp_cue_cards = self.cue_cards.copy
-
-        return selected_cue_card.cue_card, selected_cue_card.cue_card_print
-
-    @abstractmethod
-    def _create_cue_system_prompt(self):
-        pass
-
-    @abstractmethod
-    def _create_cue_user_prompt(self):
-        pass
-        
-    
-class GameStreamDirector(Director):
-    def __init__(self):
-        super().__init__()
-
-    def prepare_for_gameStream(self, video_title, video_summary):
-        self.title = video_title
-        self.video_summary = video_summary
-
-    def _generate_starting_cue(self, counter):
-        if counter == 0:
-            return "開始しました、自分の名前をもじった挨拶から実況を始めてください", "挨拶して"
-        elif counter == 1:
-            return "今日プレイするのはどんなゲームか相方に質問してください", "ゲームについて聞いて"
-        elif counter == 2:
-            return "視聴者にも伝わるよう質問に回答してください", "答えて"
-        return "", ""
-
-    def _create_cue_system_prompt(self):
-        # 後で考える
-
-        system_prompt = f'''
-            後で考える
-       '''
-
-        return system_prompt
-    
-    def _create_cue_user_prompt(self):
-        # 直近20個のセリフをテキストで取得
-        with model.session_scope() as session:
-            serif_text = Serif.get_serif_text_by_video_title(session, self.title, 20, False)
-
-        # 直近のストリーマーの発言：
-        user_prompt = f'''
-            Most recent streamer statement:
-            {serif_text}
-        '''
-
-        return user_prompt
-    
-class RadioDirector(Director):
-    def __init__(self):
-        super().__init__()
+class Director():
+    def __init__(self, title, debug_mode):
+        self.ai_generator = OpenAIClient(debug_mode)
+        self.title = title
+        self.debug_mode = debug_mode
         self.news_titles = []
         self.words = []
 
-    def prepare_for_radio_part(self, index, part_name, part_theme):
-        self.radio_part_index = index
-        self.title = part_name
-        self.part_theme = part_theme
+    # 動画作成前にディレクターが準備する
+    def prepare_for_streaming(self, video_data:Video, program_type:ProgramType, streamers):
+        self.streamers = streamers
+        self.host_serif_system_prompt2 = ""
+        self.guest_serif_system_prompt2 = ""
+        for index, streamer in enumerate(streamers):
+            with model.session_scope() as session:
+                serif_system_prompt = session.query(SerifSystemPrompt).filter(SerifSystemPrompt.program_name == program_type.program_name).filter(SerifSystemPrompt.section_name == None).filter(SerifSystemPrompt.streamer_type == index).first()
+                if serif_system_prompt == None:
+                    continue
+                serif_system_prompt = serif_system_prompt.text
+                serif_system_prompt = serif_system_prompt.replace("[user_additional_data1]", video_data.user_additional_data1).replace("[user_additional_data2]", video_data.user_additional_data2)
+                if streamer.get_profile().role == Role.DUO_VIDEO_HOST.value or streamer.get_profile().role == Role.SOLO_VIDEO_HOST.value:
+                    self.host_serif_system_prompt2 = serif_system_prompt
+                else:
+                    self.guest_serif_system_prompt2 = serif_system_prompt
 
-    def _generate_starting_cue(self, counter):
-        if self.radio_part_index == 0:
-            return self._radio_start_cue(counter)
-        else:
-            return self._radio_after_the_commercial_cue(counter) 
+    # セクション開始時にディレクターが準備する
+    def prepare_for_section(self, program_type:ProgramType, section:StaticSection):
+        host_serif_system_prompt1, guest_serif_system_prompt1= self._replace_main_serif_system_prompt(program_type, section, SERIF_SYSTEM_PROMPT_MAIN)
+        
+        self.host_main_serif_system_prompt = host_serif_system_prompt1 + self.host_serif_system_prompt2
+        self.guest_main_serif_system_prompt = guest_serif_system_prompt1 + self.guest_serif_system_prompt2
 
-    def _radio_start_cue(self, counter):
-        if counter == 0:
-            return "ラジオ開始です。挨拶してください", "挨拶して"
-        elif counter == 1:
-            return "トークテーマを視聴者に伝えて", "今日のテーマ"
-        elif counter == 2:
-            return "トークテーマに耳なじみのない単語があったら、解説・質問などしてください", "感想"
-        return "", ""
-
-    def _radio_after_the_commercial_cue(self, counter):
-        if counter == 0:
-            return "CM明けです。挨拶してください", "挨拶して"
-        elif counter == 1:
-            return "次のトークテーマを視聴者に伝えて", "今日のテーマ"
-        elif counter == 2:
-            return "トークテーマに耳なじみのない単語があったら、解説・質問などしてください", "感想"
-        return "", ""
-
-    def _generate_ending_cue(self, extra_rounds):
-        if self.radio_part_index == RADIO_THEME_TALK_NUM-1:
-            return self._radio_end_cue(extra_rounds)
-        else:
-            return self._radio_before_the_commercial_cue(extra_rounds)
-
-    def _radio_end_cue(self, extra_rounds):
-        if extra_rounds == 2:
-            return "ラジオ終了です。まとめに入ってください。", "まとめ"
-        if extra_rounds == 1:
-            return "ラジオ終了です。締めの挨拶をお願いします。", "締めの挨拶"
-        elif extra_rounds == 0:
-            return "ラジオ最後の一言です。「いいね」と「高評価」を視聴者にお願いしてください", "締めの挨拶"
-
-    def _radio_before_the_commercial_cue(self, extra_rounds):
-        if extra_rounds == 2:
-            return "このトークテーマがそろそろ終わります。次のテーマに行く前に、まとめに入ってください。", "まとめ"
-        if extra_rounds == 1:
-            return "まとめを受けた感想を話してください。", "締めの挨拶"
-        elif extra_rounds == 0:
-            return "CMに入ります。", "締めの挨拶"
-
-    def _create_cue_system_prompt(self):
-        # あなたはラジオの天才ディレクターです。
-        # 刺激的で面白いラジオを作るために、次の発言者に見せるカンペを考えてください。
-        # 話題を変えるために演者に質問したり、面白くなりそうな話題を広げるよう促したりしてください。
-        # 返答がそのままカンペとして演者に見せられます。指示のみを40文字以内で簡潔に、演者が理解しやすいように返答してください。
-
-        system_prompt = f'''
-            You are a genius radio director. For creating an exciting and engaging radio show, think of cue cards to show the next speaker. Prompt questions to change the subject or to expand on topics that could become interesting. Your responses will be directly shown to the performer as cue cards. Please reply with instructions only, concisely within 40 characters, so that it's easy for the performer to understand.
-       '''
-        return system_prompt
+    def _replace_main_serif_system_prompt(self, program_type:ProgramType, section:StaticSection, serif_system_prompt: str):
+        def speaking_duration_text(duration):
+            if duration == 0:
+                return ""
+            return f"{duration}文字以内の一文に限定し、"
+        
+        host_speaking_duration = speaking_duration_text(section.host_speaking_duration)
+        host_serif_system_prompt = serif_system_prompt.replace("[program_name]", program_type.program_name).replace("[program_summary]", program_type.program_summary).replace("[section_name]", section.section_name).replace("[speaking_duration]", host_speaking_duration)
+        guest_speaking_duration = speaking_duration_text(section.guest_speaking_duration)
+        guest_serif_system_prompt = serif_system_prompt.replace("[program_name]", program_type.program_name).replace("[program_summary]", program_type.program_summary).replace("[section_name]", section.section_name).replace("[speaking_duration]", guest_speaking_duration)
+        return host_serif_system_prompt, guest_serif_system_prompt
     
-    def _create_cue_user_prompt(self):
+    def create_direction(self, section, loop_counter, current_time, streamer_index):
+        # システムプロンプトを生成
+        serif_system_prompt = self._create_serif_system_prompt(section, streamer_index)
+
+        # カンペを生成
+        cue_card = self._create_cue_card(section, loop_counter, streamer_index)
+
+        # 終了条件をチェック
+        end_flag = self._check_end_condition(section, loop_counter, current_time)
+
+        return serif_system_prompt, cue_card, end_flag
+
+    def _create_serif_system_prompt(self, section:StaticSection, streamer_index):
+        if streamer_index == 0:
+            main_serif_system_prompt = self.host_main_serif_system_prompt
+        else:
+            main_serif_system_prompt = self.guest_main_serif_system_prompt
+        # システムプロンプトをデータベースから取得
+        with model.session_scope() as session:
+            serif_system_prompt = session.query(SerifSystemPrompt).filter(SerifSystemPrompt.program_name == section.program_name).filter(SerifSystemPrompt.section_name == section.section_name).filter(SerifSystemPrompt.streamer_type == streamer_index).first()
+            if serif_system_prompt == None:
+                return main_serif_system_prompt
+            return main_serif_system_prompt + serif_system_prompt.text
+
+    def _create_cue_card(self, section:StaticSection, counter, streamer_index):
+        with model.session_scope() as session:
+            cue_sheets = deepcopy(session.query(CueSheet).filter(CueSheet.program_name == section.program_name).filter(CueSheet.section_name == section.section_name).filter(CueSheet.streamer_type == streamer_index).all())
+
+        if len(cue_sheets) == 0:
+            return ""
+
+        for cue_sheet in cue_sheets:
+            # ランダム配信の場合、または指定されたカウンタに基づいて適切なdelivery_sequenceを持つcue_sheetを選択
+            if cue_sheet.delivery_sequence == 0 and self.cue_interval == 0 or \
+            cue_sheet.delivery_sequence == (counter // 2) + 1:
+                temp_cue_sheet = cue_sheet
+                break  # 適切なcue_sheetが見つかったのでループを終了
+        else:
+            # ループがアイテムを見つけずに完了した場合（temp_cue_sheetがセットされなかった場合）
+            return ""
+
+        if temp_cue_sheet.is_ai:
+            # AIディレクターがカンペを生成
+            cue_card = self._generate_ai_directed_cue(temp_cue_sheet.cue_text, section)
+        else:
+            # そのままのカンペを使用
+            cue_card = temp_cue_sheet.cue_text
+
+        return cue_card
+         
+    def _generate_ai_directed_cue(self, system_prompt, section:StaticSection):
+        # 今までの会話をデータベースから取り出す
+        user_prompt = self._create_cue_user_prompt(section)
+        # AIディレクターがカンペを生成
+        cue_card = self.ai_generator.generate_cue(system_prompt, user_prompt)
+        return cue_card
+        
+    def _create_cue_user_prompt(self, section:StaticSection):
         # 直近20個のセリフをテキストで取得
         with model.session_scope() as session:
-            serif_text = Serif.get_serif_text_by_video_title(session, self.title, 20, False)
+            serif_text = Serif.get_serif_text_by_video_title(session, f"{self.title}_{section.order}", 20, False)
 
         # 直近のストリーマーの発言：
         user_prompt = f'''
-            current theme: {self.part_theme}
             Most recent streamer statement:
             {serif_text}
         '''
+
         return user_prompt
-    
-    def create_talk_theme(self, output_path, image_title):
-        if  AI_DIRECTOR_MODE is True:
-            # AIでトークテーマを生成
-            talk_theme = self._generate_ai_talk_theme()
+
+    def _check_end_condition(self, section:StaticSection, loop_counter, current_time):
+        if section.end_condition_type == 0:
+            if current_time > section.end_condition_value:
+                return True
+        elif section.end_condition_type == 1:
+            if loop_counter + 1 == section.end_condition_value:
+                return True
+        return False
+      
+    def create_background_image(self, section:StaticSection, output_path, image_title, video_data:Video):
+        if section.background_image_type == 0:
+            background_image_prompt = self._create_background_image_prompt(section, video_data)
+            log.show_message(f"background_image_prompt={background_image_prompt}", newline=True)
+            # AIで背景画像を生成
+            return self.ai_generator.generate_background_image(background_image_prompt, output_path, image_title)
         else:
-            # ランダムでデータベースからトークテーマを取得
-            talk_theme = self._generate_random_talk_theme()
+            if section.background_image_type == 1:
+                order = section.order - 1
+            elif section.background_image_type == 2:
+                order = section.background_image_order_num
+            else:
+                return None
+            return self._get_previous_background_image(order)
+
+    def _create_background_image_prompt(self, section:StaticSection, video_data:Video):
+        # システムプロンプトをデータベースから取得
+        background_image_prompt = section.background_image_prompt.replace("[user_additional_data1]", video_data.user_additional_data1).replace("[user_additional_data2]", video_data.user_additional_data2)
+        return background_image_prompt
+    
+    def _get_previous_background_image(self, order):
+        with model.session_scope() as session:
+            previous_video = session.query(VideoSection).filter(VideoSection.video_title == self.title).filter(VideoSection.order == order).first()
+            background_image_path = previous_video.background_image_path
+        return background_image_path
+
+    def select_background_music(self, section:StaticSection):
+        if section.background_music_type == 0:
+            return section.background_music_path
+        elif section.background_music_type == 1:
+            return self._get_random_music()
+        elif section.background_music_type == 2:
+            order = section.order - 1
+        elif section.background_music_type == 3:
+            order = int(section.background_music_path)
+        else:
+            return None
+        return self._get_previous_background_music(order)
+
+    def _get_random_music(self):
+        folder_names = [name for name in os.listdir(DATA_FOLDER + "/BGM") if os.path.isdir(os.path.join(DATA_FOLDER + "/BGM", name))]
+        return random.choice(folder_names)
+    
+    def _get_previous_background_music(self, order):
+        with model.session_scope() as session:
+            previous_video = session.query(VideoSection).filter(VideoSection.video_title == self.title).filter(VideoSection.order == order).first()
+            background_music_path = previous_video.background_music_path
+        return background_music_path
+
+    def create_talk_theme(self, output_path, image_title):
+        # AIでトークテーマを生成
+        talk_theme = self._generate_ai_talk_theme()
 
         # トークテーマから背景画像を生成
-        talk_theme['background_image_url'] = self.commentary_generator.generate_background_image(talk_theme['theme'], output_path, image_title)
+        talk_theme['background_image_url'] = self.ai_generator.generate_background_image(talk_theme['theme'], output_path, image_title)
 
         return talk_theme
-
-    def _generate_random_talk_theme(self):
-        # トークテーマをデータベースから取得
-        with model.session_scope() as session:
-            all_talk_themes = session.query(TalkTheme).all()
-        selected_talk_theme = random.choice(all_talk_themes)
-        return selected_talk_theme
 
     def _generate_ai_talk_theme(self):
         talk_theme = {}
         system_prompt, user_prompt = self._create_talk_theme_prompt()
-        talk_theme['theme'] = self.commentary_generator.generate_talk_theme(system_prompt, user_prompt)
+        talk_theme['theme'] = self.ai_generator.generate_talk_theme(system_prompt, user_prompt)
         talk_theme['theme_jp'] = talk_theme['theme']
         return talk_theme
 
     def _create_talk_theme_prompt(self):
-        if DEBUG_FLAG == True:
+        if self.debug_mode == True:
             random_news = "『ヘルダイバー2』先行レビュー。PvEに挑み続けるワイワーーーーイ系協力型TPS。コマンド入力で支援を呼び、エイリアンどもに“500kg”の爆弾を落とせ!! - ファミ通.com"
             random_word = "hellllllll"
         else:
@@ -309,25 +234,23 @@ class RadioDirector(Director):
         return system_prompt, user_prompt
     
     def create_summary(self, output_path, title):
-        if  AI_DIRECTOR_MODE is True:
-            # AIでトークテーマを生成
-            summary = self._generate_ai_summary(title)
-        else:
-            return None
+        # AIでトークテーマを生成
+        summary = self._generate_ai_summary(title)
 
         # トークテーマから背景画像を生成
-        summary['background_image_url'] = self.commentary_generator.generate_background_image(summary['theme'], output_path, title)
+        summary['background_image_url'] = self.ai_generator.generate_background_image(summary['theme'], output_path, title)
 
         return summary
 
     def _generate_ai_summary(self, title):
         # 今までのトークを取得
         serif_texts = []
-        for i in range(RADIO_THEME_TALK_NUM - 1):
+        for i in range(1):
             with model.session_scope() as session:
                 serif_texts.append(Serif.get_serif_text_by_video_title(session, title + f"_{i}", 0, False))
         summary = {}
-        summary['theme'] = self.commentary_generator.generate_radio_summary(serif_texts)
+        summary['theme'] = self.ai_generator.generate_radio_summary(serif_texts)
         summary['theme_jp'] = '今日のまとめ'
         return summary
+    
     

@@ -1,23 +1,34 @@
-import datetime
 import json
 from math import e
 import os
-from pyexpat import model
 import random
 import shutil
 from openai import OpenAI
 import requests
-from config import DATA_FOLDER, DEBUG_FLAG, MESSAGE_HISTORY_LIMIT
+from config import DATA_FOLDER, MESSAGE_HISTORY_LIMIT
 import log
 
 openai_api_key = os.getenv("OPENAI_API_KEY", "")
 openai_client = OpenAI(api_key=openai_api_key)
-class OpenAIClient:    
+class OpenAIClient:
+    def __init__(self, debug_mode):
+        self.debug_mode = debug_mode
+        
     # 実況文を生成する。
     def generate_commentary(self, system_prompt, previous_messages, user_prompts, capture_base64_images):
         dummy_texts = ['これはデバッグ用のダミー応答です。いい。改行のテストのため、意図的に長い文章にしています。ご協力感謝します。',
                       'I\'m sorry, his is a dummy response for debugging. Good. It is intentionally long for testing line breaks. Thank you for your cooperation.',
-                      'これは短いデバッグダミー応答です。']
+                      'これは短いデバッグダミー応答です。',
+                      """宇宙太郎、実は昔、さいたま市の星空があまりにも美しいのに心奪われて、自分だけのものにしたいって思っちゃったんすよ。だから、ある夜、星を観測するための大きな望遠鏡を持ち出して、公園で独り占めしてたんす。でも、そこに来たのが小学生の真希ちゃん。真希ちゃんは星が大好きで、毎晩星を見るのが日課だったんすけど、宇宙太郎がいるせいで見れなくなっちゃったんすよね。
+
+真希ちゃんの「星はみんなのものだよ」という一言で、宇宙太郎は自分の間違いに気づいたんす。罪悪感と反省から、宇宙太郎は星空保護活動を始めたんす。さいたま市の星空をより美しく、そして""",
+"""
+真希ちゃんの一言が全てを変えたんだね。でも、「星はみんなのもの」というシンプルな真実に気づくまで、宇宙太郎はなぜそんなに星を独り占めしたかったんだろう？""",
+""" 宇宙太郎が星を独り占めしたかったのは、実は幼い頃からの夢があったからなんすよ。宇宙太郎は子供の頃に父親と一緒に星空を見るのが大好きだったんすけど、父親が急にいなくなっちゃって、その思い出だけが宇宙太郎にとっての宝物だったんす。だから、その思い出を守るために、「星は自分だけのもの」と思い込んでしまったんすよね。
+
+でも、真希ちゃんの一言で、宇宙太郎は気づいたんす。「星はみんなのもの」というシンプルな真実を。そして、星空を共有する喜びが、実は父親との思い出をより美しく、より大切なものに変えるんだってことに。だからこそ、彼は星空保護の活動に情""",
+""" あーしもそれ、気になるっすね。星空観察会でのルール違反に対しては、埼玉太郎が考えた対処法があって、それがこの物語のクライマックスにもつながるんですよ。埼玉太郎は、星空の下でのお楽しみを最大限に味わってもらうために、万が一ルールを破った参加者がいた場合は、その人にさいたま市の美しい夜空をもっと深く知ってもらうための特別プログラムを用意していました。
+そのプログラムとは、星空ガイドの専門家と一緒に、夜空の星々を詳しく学ぶセッション。ルール違反をした人には、なんと星空の美しさと大切さをもっと深く理解してもらうチャンスを与えるんです。しかし、物語のクライマックスで、ルールを破ったの"""]
         dummy_text = random.choice(dummy_texts)
         if capture_base64_images:
             gpt_model = "gpt-4-vision-preview"
@@ -70,7 +81,7 @@ class OpenAIClient:
                       previous_messages=[], user_prompts=[], capture_base64_images=[], dummy_text="これはデバッグ用のダミー応答です。"):
         messages = self._build_messages(system_prompt, previous_messages=previous_messages, 
                                         user_prompts=user_prompts, capture_base64_images=capture_base64_images)
-        if DEBUG_FLAG:
+        if self.debug_mode:
             text = dummy_text
         else:
             try:
@@ -165,7 +176,7 @@ class OpenAIClient:
     
     def _generate_json(self, messages, gpt_model, dummy_json):
         ret_json = dummy_json
-        if not DEBUG_FLAG:
+        if not self.debug_mode:
             try:
                 response = openai_client.chat.completions.create(
                     model=gpt_model,
@@ -181,7 +192,7 @@ class OpenAIClient:
                 log.handle_api_error(e, "GPT JSONモード呼び出し中にエラーが発生しました", gpt_model=gpt_model, messages=messages)
         return ret_json
 
-    def generate_background_image(self, talk_theme, output_path, image_title):
+    def generate_background_image(self, prompt, output_path, image_title):
         def try_generate_image(prompt):
             try:
                 response = openai_client.images.generate(
@@ -193,24 +204,25 @@ class OpenAIClient:
                 )
                 return response
             except Exception as e:
-                log.handle_api_error(e, "dall-e-3呼び出し中にエラーが発生しました", talk_theme=talk_theme, prompt=prompt)
-                return None
+                log.handle_api_error(e, "dall-e-3呼び出し中にエラーが発生しました", prompt=prompt)
 
-
-        if DEBUG_FLAG:
+        if self.debug_mode:
             dummy_png = random.choice(['/images/background/dummy1.png', '/images/background/dummy2.png', '/images/background/dummy3.png']) 
             dummy_image = DATA_FOLDER + dummy_png
             image_filename = os.path.join(output_path, image_title + '.png')
             shutil.copy2(dummy_image, image_filename)
         else:
-            prompt = self._create_background_image_prompt(talk_theme)
+            prompt = self._add_image_style_for_background_image_prompt(prompt)
             response = try_generate_image(prompt)
             
             # エラーコードがcontent_policy_violationの場合、プロンプトを修正して再試行
             if response and 'error' in response and response['error']['code'] == 'content_policy_violation':
                 # プロンプトの修正方法をここに実装
-                modified_prompt = self._create_background_image_prompt(talk_theme, True)
+                modified_prompt = self._add_image_style_for_background_image_prompt(prompt, True)
                 response = try_generate_image(modified_prompt)
+                if response and 'error' in response and response['error']['code'] == 'content_policy_violation':
+                    modified_prompt = self._add_image_style_for_background_image_prompt(prompt, True, True)
+                    response = try_generate_image(modified_prompt)
 
             if response is None:
                 return None
@@ -228,49 +240,49 @@ class OpenAIClient:
 
         return image_filename
 
-    def _create_background_image_prompt(self, talk_theme, more_safe=False):
+    def _add_image_style_for_background_image_prompt(self, base_prompt, more_safe=False, more_more_safe=False):
         image_styles = [
-                            "Watercolor", "Oil Painting", "Pencil Sketch", "Charcoal Drawing", "Pop Art",
-                            "Abstract Art", "Pixel Art", "Monochrome", "Realistic", "Psychedelic",
-                            "Vintage", "Retro Futuristic", "Minimalist", "Surrealism", "Graffiti",
-                            "Comic Style", "Geometric", "Neon Art", "Pastel Colors", "Grunge Style",
-                            "Documentary Style Photography", "Landscape Photography", "Urban Street Photography",
-                            "Portrait Photography", "Vintage Photography", "Black and White Photography",
-                            "Macro Photography", "Astrophotography", "Night Scene Photography", "Fashion Photography",
-                            "Nature Photography", "Animal Photography", "Underwater Photography", "Sports Photography",
-                            "Travel Photography", "Drone Aerial Photography", "Fine Art Photography",
-                            "Sunset/Sunrise Photography", "Food Photography", "Abstract Photography",
-                            "Cyberpunk", "Steampunk", "Fantasy Art", "Metallic Texture", "Classical Art",
-                            "Impressionism", "Expressionism", "Art Nouveau", "Art Deco", "Folk Art",
-                            "Fairy Tale Imagery", "Space Theme", "Underwater World", "Futuristic City",
-                            "Fantastical Landscape", "Digital Art", "Glitch Art", "Surrealism", "Concept Art",
-                            "Environmental Art"
-                        ]
+            "Watercolor", "Oil Painting", "Pencil Sketch", "Charcoal Drawing", "Pop Art",
+            "Abstract Art", "Pixel Art", "Monochrome", "Realistic", "Psychedelic",
+            "Vintage", "Retro Futuristic", "Minimalist", "Surrealism", "Graffiti",
+            "Comic Style", "Geometric", "Neon Art", "Pastel Colors", "Grunge Style",
+            "Fine Art Photography", "Landscape Photography", "Urban Street Photography",
+            "Portrait Photography", "Black and White Photography",
+            "Macro Photography", "Astrophotography", "Night Scene Photography", "Fashion Photography",
+            "Nature Photography", "Animal Photography", "Underwater Photography", "Sports Photography",
+            "Travel Photography", "Drone Aerial Photography",
+            "Sunset/Sunrise Photography", "Food Photography", "Abstract Photography",
+            "Cyberpunk", "Steampunk", "Fantasy Art", "Metallic Texture", "Classical Art",
+            "Impressionism", "Expressionism", "Art Nouveau", "Art Deco", "Folk Art",
+            "Fairy Tale Imagery", "Space Theme", "Underwater World", "Futuristic City",
+            "Fantastical Landscape", "Digital Art", "Glitch Art", "Concept Art",
+            "Environmental Art"
+        ]
 
         # ランダムにスタイルを選択
         selected_style = random.choice(image_styles)
         
-        # ラジオ番組のための背景画像を作成してください。
-        # テーマに合った視覚的なイメージを提供してください。
-        prompt = f'''
-            Please create a background image for a radio show. Provide a visual image that matches the theme.
-            talk_theme: {talk_theme}
-            image style: {selected_style}
-        '''
-        if more_safe:
-            # ラジオ番組の背景画像を作成してください。
-            # テーマに合ったビジュアルイメージを提供してください。
+        if not more_safe:
+            base_prompt += f'''
+                image style: {selected_style}
+            '''
+        elif more_safe:
             # 実在の人物名や不適切なワードは無視してください。
             # テーマの本質を象徴する抽象的で芸術的な画像を作成し、テーマに関連するムードや雰囲気をキャプチャしてください。
             # 色や形を使用してテーマの本質を反映させ、直接的な表現を避けて、
             # テーマの一般的な感覚を伝えるビジュアルを作成することに焦点を当ててください。
-            prompt = f'''
-                Please create a background image for the radio program. Provide a visual image that matches the theme. Ignore any real person names or inappropriate words.Create an abstract and artistic image that symbolizes the essence of the theme, and capture the mood and atmosphere related to the theme. Use colors and shapes to reflect the essence of the theme, avoid direct representations, and focus on creating a visual that conveys the general sense of the theme.
-                talk_theme: {talk_theme}
+            base_prompt += f'''
+                Ignore any real person names or inappropriate words.Create an abstract and artistic image that symbolizes the essence of the theme, and capture the mood and atmosphere related to the theme. Use colors and shapes to reflect the essence of the theme, avoid direct representations, and focus on creating a visual that conveys the general sense of the theme.
+                image style: {selected_style}
+            '''
+        elif more_more_safe:
+            # ラジオの背景として使用できる。楽し気なイメージを作成してください。
+            base_prompt = f'''
+                Create an image that can be used as a radio background. Create a cheerful image.
                 image style: {selected_style}
             '''
 
-        return prompt
+        return base_prompt
     
     @staticmethod
     def update_previous_messages(previous_messages, assistant_message, partner_message=""):

@@ -24,20 +24,12 @@ database_path = os.path.join(DATABASE_FOLDER, 'database.db')
 engine = create_engine(f'sqlite:///{database_path}')
 Session = sessionmaker(bind=engine)
 
-# 機能フラグ設定
-# ----------------
-DEBUG_FLAG = True            # デバッグモード
-EXPERIMENT_FLAG = False       # 実験モード
-CUE_CARDS_PRINT_FLAG = False  # カンペ表示
-AI_DIRECTOR_MODE = True       # AIディレクターモード
-
 # 動画・ラジオ設定
 # ----------------------
 START_TIME = 1.5              # 実況開始時間（秒）
-MAX_EXTRA_ROUNDS = 3          # 最大追加ラウンド数
-RADIO_DURATION_SEC = 60      # ラジオの1パートの時間（秒）
-RADIO_THEME_TALK_NUM = 2      # トークテーマ数
-RADIO_SUMMARY_FLAG = True     # ラジオのまとめトークをするかどうか
+FADE_DURATION_SEC = 3         # フェード時間（秒）
+CUE_CARDS_PRINT_FLAG = False  # カンペ表示
+BACKUP_IMAGE_PATH = os.path.join(DATA_FOLDER, '../images/backup.jpg')  # バックアップ画像パス
 
 # 字幕・カンペ設定
 # ----------------
@@ -72,6 +64,6 @@ THEME_SETTINGS = {
 
 # その他設定
 # --------------
-MESSAGE_HISTORY_LIMIT = 20  # メッセージ履歴上限
+MESSAGE_HISTORY_LIMIT = 40  # メッセージ履歴上限
 VOICEVOX_VVID_DATA_CSV = os.path.join(BASE_DIR, '../data/voicevox_speaker_style_ids.csv')  # VOICEVOXデータパス
 

@@ -1,16 +1,17 @@
+from copy import deepcopy
 import math
+import os
 import time
 import cv2
 import base64
-import numpy as np
 from io import BytesIO
 from PIL import Image
-from httpx import stream
-from moviepy.editor import VideoFileClip, AudioFileClip, CompositeVideoClip, TextClip, CompositeAudioClip, ImageClip, concatenate_videoclips
-from requests import session
-from config import CUE_CARDS_PRINT_FLAG, CUE_SETTINGS, DATA_FOLDER, RADIO_DURATION_SEC, SUBTITLE_SETTINGS, THEME_SETTINGS, Session
-from model import RadioPart, Serif, StreamerProfile
+from moviepy.editor import VideoFileClip, AudioFileClip, CompositeVideoClip, TextClip, CompositeAudioClip, ImageClip, concatenate_audioclips
+from moviepy.audio.fx.all import audio_fadein, audio_fadeout
+from config import BACKUP_IMAGE_PATH, CUE_CARDS_PRINT_FLAG, CUE_SETTINGS, DATA_FOLDER, FADE_DURATION_SEC, SUBTITLE_SETTINGS, THEME_SETTINGS, Session
+from model import Serif, StreamerProfile, VideoSection
 from static_data import Role
+import model
 
 class VideoProcessor:
     def __init__(self):
@@ -63,6 +64,9 @@ class VideoProcessor:
         return img_str
 
     def _wrap_text(self, text, max_chars_per_line):
+        # 既存の改行を取り除く
+        text = text.replace('\n', '')
+        
         lines = []
         current_line = ""
 
@@ -121,8 +125,8 @@ class VideoProcessor:
                     clips.append(text_clip)
 
                 # 立ち絵を付加
-                if "voicevox_chara" in serif and "emotion" in serif:
-                    image_path = self._get_character_image_path(serif["voicevox_chara"], serif["emotion"])
+                if "name" in serif and "emotion" in serif:
+                    image_path = self._get_character_image_path(serif["name"], serif["emotion"])
                     image_clip = ImageClip(image_path).set_start(serif["start_time_sec"]).set_duration(serif["voice_duration"])
                     image_clip = self._make_bounce_animation(image_clip, video_height)
                     clips.append(image_clip)
@@ -142,98 +146,144 @@ class VideoProcessor:
             final_clip.write_videofile(output_path, codec='libx264', audio_codec='aac')
 
         return output_path
-    
-    def create_radio(self, save_folder, title):
-        session = Session()
-        output_path = f'{save_folder}/movie_{int(time.time())}.mp4'
-        radio_parts = session.query(RadioPart).filter(RadioPart.video_title == title).all()
-        streamer_profiles = session.query(StreamerProfile).filter(StreamerProfile.video_title == title).all()
+       
+    def create_video(self, save_folder, title):
+        output_path = f'{save_folder}/movie.mp4'
+        if os.path.exists(output_path):
+            output_path = f'{save_folder}/movie_{int(time.time())}.mp4'
+        with model.session_scope() as session:
+            video_sections = deepcopy(session.query(VideoSection).filter(VideoSection.video_title == title).order_by(VideoSection.order).all())
+            streamer_profiles = deepcopy(session.query(StreamerProfile).filter(StreamerProfile.video_title == title).all())
 
         clips = []
         audio_clips = []
-        end_time = 0
         subtitle_settings = SUBTITLE_SETTINGS.copy()
+        bgm_data = []
+        temp_image_path = None
+        temp_location = None
+        for section in video_sections:
+            # bgm_dataが空、または現在のセクションのBGMパスが最後のBGMパスと異なる場合、新しいBGM情報を追加
+            if not bgm_data or section.background_music_path != bgm_data[-1]["path"]:
+                bgm_data.append({
+                    "start_time": section.start_time_sec,
+                    "end_time": section.end_time_sec,
+                    "path": section.background_music_path
+                })
+            else:
+                # 同じBGMパスの場合、終了時間のみ更新
+                bgm_data[-1]["end_time"] = section.end_time_sec
 
-        for radio_part in radio_parts:
-            start_time = end_time
-            serifs = session.query(Serif).filter(Serif.video_title == radio_part.part_name).all()
+        for bgm in bgm_data:
+            bgm_full_path = f"{DATA_FOLDER}/BGM/{bgm['path']}/{bgm['path']}.mp3"
+            bgm_full_path = os.path.normpath(bgm_full_path)
+            # BGMの読み込み
+            full_audio_clip = AudioFileClip(bgm_full_path)
+            # 指定された期間でBGMをループさせる
+            looped_audio_clip = self._loop_audio_clip(full_audio_clip, bgm["end_time"] - bgm["start_time"])
+            # フェードインとフェードアウトを適用
+            faded_audio_clip = audio_fadein(looped_audio_clip, FADE_DURATION_SEC)
+            faded_audio_clip = audio_fadeout(faded_audio_clip, FADE_DURATION_SEC)
+            # 開始時間を設定
+            faded_audio_clip = faded_audio_clip.set_start(bgm["start_time"])
+            audio_clips.append(faded_audio_clip)
 
-            # 背景画像の読み込み
-            image_path = radio_part.background_image_pass
-            # 各radio_partの総時間を計算
-            last_serif = serifs[-1]  # 最後のセリフを取得
-            total_duration = last_serif.start_time_sec + last_serif.voice_duration
-            # 背景画像の持続時間を設定
-            if image_path:
-                image_clip = ImageClip(image_path).set_duration(total_duration).set_start(start_time)
-                clips.append(image_clip)
+        with model.session_scope() as session:
+            for sections_index, section in enumerate(video_sections):
+                serifs = session.query(Serif).filter(Serif.video_title == title).filter(Serif.section_name == section.section_name).order_by(Serif.start_time_sec).all()
 
-            # 画像の読み込み
-            image = cv2.imread(image_path)
-            # 画像の高さを取得
-            image_height = image.shape[0]
+                # 背景画像の読み込み
+                image_path = section.background_image_path
+                # 背景画像の持続時間を設定
+                if image_path:
+                    image_clip = ImageClip(image_path).set_duration(section.end_time_sec - section.start_time_sec).set_start(section.start_time_sec)
+                    clips.append(image_clip)
 
-            for index, serif in enumerate(serifs):
-                # 音声クリップの追加
-                audio_clip = AudioFileClip(serif.voice).set_start(start_time + serif.start_time_sec)
-                audio_clips.append(audio_clip)
+                # 一時的な画像パスが存在する場合、前の画像クリップを追加
+                if temp_image_path:
+                    image_clip = ImageClip(temp_image_path).set_duration(serifs[1].start_time_sec - serifs[0].start_time_sec).set_start(serifs[0].start_time_sec).set_position(temp_location)
+                    clips.append(image_clip)
+                    temp_image_path = None
 
-                # 立ち絵とカンペの文章を動画に合成
-                if CUE_CARDS_PRINT_FLAG and serif.cue_card_print:
-                    # 立ち絵の追加
-                    image_path = DATA_FOLDER + f'/images/AD/AD1.png'
-                    cue_image_position = (50, 50)
-                    cue_image_clip = ImageClip(image_path).set_position(('left', 'top')).set_start(start_time + serif.start_time_sec-2.0).set_duration(serif.voice_duration)
-                    clips.append(cue_image_clip)
+                # 画像の読み込み
+                image = cv2.imread(image_path)
+                if image is None:
+                    image = cv2.imread(BACKUP_IMAGE_PATH)
+                # 画像の高さを取得
+                image_height = image.shape[0]
 
-                    # カンペの文章をホワイトボードに載せる
-                    wrapped_cue_text = self._wrap_text(serif['cue_card_print'], 5) # カンペテキストを改行
-                    text_clip = TextClip(
-                        wrapped_cue_text, 
-                        **CUE_SETTINGS
-                    ).set_position((cue_image_position[0], cue_image_position[1] + 20)).set_start(start_time + serif.start_time_sec-2.0).set_duration(serif.voice_duration)
-                    clips.append(text_clip)
+                for index, serif in enumerate(serifs):
+                    for part in serif.serif_parts:
+                        # 音声クリップの追加
+                        audio_clip = AudioFileClip(part.part_voice).set_start(part.start_time_sec)
+                        audio_clips.append(audio_clip)
 
-                # streamer_profilesから.nameserif.nameと一致するものを取得
-                streamer_profile = next((streamer_profile for streamer_profile in streamer_profiles if streamer_profile.name == serif.name), None)
+                    # 立ち絵とカンペの文章を動画に合成
+                    if CUE_CARDS_PRINT_FLAG and serif.cue_card:
+                        # 立ち絵の追加
+                        image_path = DATA_FOLDER + f'/images/AD/AD1.png'
+                        cue_image_position = (50, 50)
+                        cue_image_clip = ImageClip(image_path).set_position(('left', 'top')).set_start(serif.start_time_sec-2.0).set_duration(serif.voice_duration)
+                        clips.append(cue_image_clip)
 
-                # 立ち絵を付加
-                location = 'left' if streamer_profile.role == Role.DUO_RADIO_HOST.value else 'right'
-                # image_pathの取得
-                image_path = self._get_character_image_path(serif.voicevox_chara, serif.emotion, location == 'left')
-                # image_clipの持続時間の設定
-                if index + 1 < len(serifs):
-                    # 次の自分のセリフ（2個先のセリフ）が存在しない場合
-                    next_serif_end_time = serifs[index + 1].start_time_sec - serif.start_time_sec + serifs[index + 1].voice_duration
-                    # 最後のセリフでない場合は次のセリフの開始時間を、最後のセリフであれば現在のセリフのvoice_durationを使う
-                    duration = serifs[index + 2].start_time_sec - serif.start_time_sec if index + 2 < len(serifs) else next_serif_end_time
-                else:
-                    # 現在のセリフが最後のセリフの場合
-                    duration = serif.voice_duration
-                # ImageClipのインスタンス作成
-                image_clip = ImageClip(image_path).set_start(start_time + serif.start_time_sec).set_duration(duration)
-                # 画像にアニメーションを付加
-                image_clip = self._make_bounce_animation(image_clip, image_height, location=location)
-                clips.append(image_clip)
+                        # カンペの文章をホワイトボードに載せる
+                        wrapped_cue_text = self._wrap_text(serif['cue_card_print'], 5)
+                        text_clip = TextClip(
+                            wrapped_cue_text, 
+                            **CUE_SETTINGS
+                        ).set_position((cue_image_position[0], cue_image_position[1] + 20)).set_start(serif.start_time_sec-2.0).set_duration(serif.voice_duration)
+                        clips.append(text_clip)
 
-                # 字幕を付加
-                wrapped_subtitle = self._wrap_text(serif.text, 26) # 字幕テキストを改行
-                subtitle_settings["stroke_color"] = serif.color #字幕の色を設定
-                subtitle_clip = TextClip(
-                    wrapped_subtitle, 
-                    **subtitle_settings
-                ).set_position(('center', 'bottom')).set_start(start_time + serif.start_time_sec).set_duration(serif.voice_duration)
-                clips.append(subtitle_clip)
+                    # streamer_profilesから.nameserif.nameと一致するものを取得
+                    streamer_profile = next((streamer_profile for streamer_profile in streamer_profiles if streamer_profile.name == serif.name), None)
 
-                # パートの終了時間を保存
-                end_time = serif.start_time_sec + serif.voice_duration    
-            
-            # テーマのテキストクリップを作成して追加
-            talk_theme_text = "テーマ：" + radio_part.talk_theme_jp
-            text_clip = TextClip(talk_theme_text, **THEME_SETTINGS).set_position(('left', 'top')).set_start(start_time).set_duration(total_duration)
-            clips.append(text_clip)
+                    for i, part in enumerate(serif.serif_parts):
+                        # 立ち絵を付加
+                        location = 'left' if streamer_profile.role == Role.DUO_VIDEO_HOST.value or streamer_profile.role == Role.SOLO_VIDEO_HOST.value else 'right'
+                        # image_pathの取得
+                        image_path = self._get_character_image_path(streamer_profile.character_images_directory , part.emotion, location == 'left')
+                        # image_clipの持続時間の設定
+                        # このセリフパートが最後のセリフパートでない場合
+                        if part.part_order != len(serif.serif_parts) - 1:
+                            # 次のセリフパートの開始時間からこのセリフパートの開始時間を引いたものが持続時間
+                            duration = serif.serif_parts[i+1].start_time_sec - part.start_time_sec
+                        else:
+                            # このセクションが最後のセクションでない場合
+                            if sections_index != len(video_sections) - 1:
+                                # 次の相手のセリフ（1個先のセリフ）が存在しない場合
+                                if index + 1 >= len(serifs):
+                                    next_section_serifs = session.query(Serif).filter(Serif.video_title == title).filter(Serif.section_name == video_sections[sections_index + 1].section_name).order_by(Serif.start_time_sec).all()
+                                    duration = next_section_serifs[1].start_time_sec - part.start_time_sec
+                                    temp_image_path, temp_location = image_path, location
+                                # 次の自分のセリフ（2個先のセリフ）が存在しない場合
+                                elif index + 2 >= len(serifs):
+                                    next_section_serifs = session.query(Serif).filter(Serif.video_title == title).filter(Serif.section_name == video_sections[sections_index + 1].section_name).order_by(Serif.start_time_sec).all()
+                                    duration = next_section_serifs[0].start_time_sec - part.start_time_sec
+                                else:
+                                    duration = serifs[index + 2].start_time_sec - part.start_time_sec
+                            # このセクションが最後のセクションの場合
+                            else:
+                                # 次の相手のセリフ（1個先のセリフ）が存在しない場合
+                                if index + 1 >= len(serifs):
+                                    duration = part.part_voice_duration
+                                # 次の自分のセリフ（2個先のセリフ）が存在しない場合
+                                elif index + 2 >= len(serifs):
+                                    duration = serifs[index + 1].start_time_sec - part.start_time_sec + serifs[index + 1].voice_duration
+                                else:
+                                    duration = serifs[index + 2].start_time_sec - part.start_time_sec
+                        # ImageClipのインスタンス作成
+                        image_clip = ImageClip(image_path).set_start(part.start_time_sec).set_duration(duration)
+                        # 画像にアニメーションを付加
+                        image_clip = self._make_bounce_animation(image_clip, image_height, location=location)
+                        clips.append(image_clip)
 
-            end_time += start_time+1.0
+                        # 字幕を付加
+                        wrapped_subtitle = self._wrap_text(part.part_text, 26)
+                        subtitle_settings["stroke_color"] = serif.color
+                        subtitle_clip = TextClip(
+                            wrapped_subtitle, 
+                            **subtitle_settings
+                        ).set_position(('center', 'bottom')).set_start(part.start_time_sec).set_duration(part.part_voice_duration)
+                        clips.append(subtitle_clip)
 
         final_audio = CompositeAudioClip(audio_clips)
         final_clip = CompositeVideoClip(clips).set_audio(final_audio)
@@ -243,15 +293,26 @@ class VideoProcessor:
 
         return output_path
     
-    def _get_character_image_path(self, character, emotion, inversion=False):
+    def _loop_audio_clip(self, audio_clip, duration):
+        """指定された総持続時間に達するまでオーディオクリップをループさせる"""
+        looped_clips = []
+        current_duration = 0
+        while current_duration < duration:
+            looped_clips.append(audio_clip)
+            current_duration += audio_clip.duration
+        # ループしたクリップを結合し、必要な総持続時間にトリミング
+        final_clip = concatenate_audioclips(looped_clips).subclip(0, duration)
+        return final_clip
+
+    def _get_character_image_path(self, character_images_directory, emotion, inversion=False):
         # 不正な感情の場合はnormalにする
         if emotion not in ["normal", "positive", "negative"]:
             emotion = "normal"
         # キャラクターと感情に基づいて立ち絵のパスを決定
         if not inversion:
-            image_path = DATA_FOLDER + f'/images/CharacterImages/{character}/{emotion}.png'
+            image_path = DATA_FOLDER + f'/{character_images_directory}/{emotion}.png'
         else:
-            image_path = DATA_FOLDER + f'/images/CharacterImages/{character}/{emotion}_inversion.png'
+            image_path = DATA_FOLDER + f'/{character_images_directory}/{emotion}_inversion.png'
         return image_path
     
     def _make_bounce_animation(self, image_clip:ImageClip, video_height, bounce_duration=0.3, bounce_height=30, location='right'):
