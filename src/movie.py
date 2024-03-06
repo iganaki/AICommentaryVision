@@ -198,18 +198,19 @@ class VideoProcessor:
                     image_clip = ImageClip(image_path).set_duration(section.end_time_sec - section.start_time_sec).set_start(section.start_time_sec)
                     clips.append(image_clip)
 
-                # 一時的な画像パスが存在する場合、前の画像クリップを追加
-                if temp_image_path:
-                    image_clip = ImageClip(temp_image_path).set_duration(serifs[1].start_time_sec - serifs[0].start_time_sec).set_start(serifs[0].start_time_sec).set_position(temp_location)
-                    clips.append(image_clip)
-                    temp_image_path = None
-
                 # 画像の読み込み
                 image = cv2.imread(image_path)
                 if image is None:
                     image = cv2.imread(BACKUP_IMAGE_PATH)
                 # 画像の高さを取得
                 image_height = image.shape[0]
+
+                # 前のセクションから続く立ち絵が存在する場合、追加
+                if temp_image_path:
+                    image_clip = ImageClip(temp_image_path).set_duration(serifs[1].start_time_sec - serifs[0].start_time_sec).set_start(serifs[0].start_time_sec)
+                    image_clip = self._make_bounce_animation(image_clip, image_height, bounce_duration=0, location=temp_location)
+                    clips.append(image_clip)
+                    temp_image_path = None
 
                 for index, serif in enumerate(serifs):
                     for part in serif.serif_parts:
@@ -326,7 +327,6 @@ class VideoProcessor:
         """
         def position_func(t):
             # 画像の下部のy座標を計算（例: ビデオの高さを基にした場合）
-            # 注意: ここでの 'video_height' は適切なビデオの高さに置き換える必要があります
             bottom_y = video_height - image_clip.size[1] # 画像の高さをビデオの高さから引く
 
             if 0 <= t <= bounce_duration:

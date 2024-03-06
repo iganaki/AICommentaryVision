@@ -66,4 +66,4 @@ THEME_SETTINGS = {
 # --------------
 MESSAGE_HISTORY_LIMIT = 40  # メッセージ履歴上限
 VOICEVOX_VVID_DATA_CSV = os.path.join(BASE_DIR, '../data/voicevox_speaker_style_ids.csv')  # VOICEVOXデータパス
-
+CLAUDE_FLAG = True  # CLAUDE使用フラグ

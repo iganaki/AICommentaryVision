@@ -81,6 +81,7 @@ class OpenAIClient:
                       previous_messages=[], user_prompts=[], capture_base64_images=[], dummy_text="これはデバッグ用のダミー応答です。"):
         messages = self._build_messages(system_prompt, previous_messages=previous_messages, 
                                         user_prompts=user_prompts, capture_base64_images=capture_base64_images)
+        
         if self.debug_mode:
             text = dummy_text
         else:

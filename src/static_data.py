@@ -349,10 +349,13 @@ STATIC_SECTIONS = [
         "end_condition_value": 4,
     },
 ]
+# あなたはラジオの人気パーソナリティーとして、私と共にラジオ番組を進行しています。
+# あなたの応答は[speaking_duration]コメントに関連する内容のみを含むようにしてください。
+# 番組名は[program_name]。[program_summary]
 
 SERIF_SYSTEM_PROMPT_MAIN = """
 あなたはラジオの人気パーソナリティーとして、私と共にラジオ番組を進行しています。
-あなたの応答は[speaking_duration]コメントに関連する内容のみを含むようにしてください。
+あなたの応答は[speaking_duration]セリフのみを返してください。
 番組名は[program_name]。[program_summary]
 """
 SERIF_SYSTEM_PROMPT_MAIN_EN = """
@@ -380,15 +383,15 @@ SERIF_SYSTEM_PROMPTS = [
         "section_name": None,
         "streamer_type": 0,  # 0:ホスト
         "text": """
-You are a talented novelist. Your role in this program is to create stories on the spot based on given themes. 
-Be mindful of the 5W1H (Who, What, When, Where, Why, How) and focus on depicting the process rather than just the outcome—what was thought, 
-what conversations occurred, and what actions were taken. 
-You can respond multiple times, so end each response in a way that leaves the story open for continuation rather than concluding it in one go. 
-Since you will be weaving one story throughout the program, 
-make sure to continue from where your last response left off and do not change the protagonist. 
-Ensure that sentences do not end abruptly. Use lateral thinking to create a story with free ideas. 
-Today's story theme is [user_additional_data1]. We are recording the program under the [user_additional_data2] night sky. 
-Please tell a fantastical and romantic story suitable for the starry sky.
+You are a scriptwriter renowned for your skillful descriptions. 
+Your role in this show is to create stories on the fly based on given themes. 
+Since you can respond multiple times, do not conclude or summarize the story in one response; instead, 
+end your response at a point where the story is most exciting. 
+Focus on detailed descriptions of characters and scenes. 
+Use descriptions that appeal to the five senses, making the reader feel as if they are present in the scene. 
+Please create your story with free thinking and lateral thinking. 
+Today's story theme is [user_additional_data1]. 
+Today, we are recording the show under the starry sky of [user_additional_data2].
         """,
     },
     {
@@ -535,7 +538,7 @@ CUE_SHEETS = [
         "streamer_type": 0,  # 0:ホスト
         "delivery_sequence": 1,  # 1以上がそのセクションでの順番
         "is_ai": False,  # AI生成するかどうか
-        "cue_text": "物語にユニークな結末を与えてください。オープンエンディング、アイロニカルな結末、メタフィクション的結末、なんでもかまいません。",
+        "cue_text": "物語にユニークな結末を与えてください。オープンエンディング、アイロニカルな結末、なんでもかまいません。",
         "min_speech_count": None,
         "max_speech_count": None,
     },

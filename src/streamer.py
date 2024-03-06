@@ -1,9 +1,10 @@
 from copy import deepcopy
 import random
 import re
-
 from sqlalchemy import between
 from audio import VoiceGenerator
+from claude_cliant import ClaudeClient
+from config import CLAUDE_FLAG
 from log import Log
 from model import StreamerProfile
 from static_data import Role
@@ -62,6 +63,7 @@ class Streamer:
     def __init__(self, streamer_profile: StreamerProfile, debug_mode=True):
         # コメンタリージェネレータとボイスジェネレータの初期化
         self.ai_generator = OpenAIClient(debug_mode)
+        self.ai_generator_claude = ClaudeClient(debug_mode)
         self.voice_generator = VoiceGenerator()
         
         # ナレーターのプロファイルの設定
@@ -69,6 +71,10 @@ class Streamer:
         
         # 過去のメッセージ履歴を格納するリストの初期化
         self.previous_messages = []
+        if CLAUDE_FLAG:
+            if self.streamer_profile.role == Role.DUO_VIDEO_HOST.value:
+                print("CLAUDEを使用するためのプロンプトを設定します。")
+                self.previous_messages.append({"role": "user", "content": "[Cue Card from Staff]番組開始です。まだ物語は開始せず、挨拶をしてください。"})
         
         self.additional_prompt = None
 
@@ -94,7 +100,13 @@ class Streamer:
         max_retries = 3  # 再試行の最大回数
         retry_num = -1
         for _ in range(max_retries):
-            commentary_text = self.ai_generator.generate_commentary(system_prompt, self.previous_messages, user_prompts, capture_base64_images)
+            # 後でちゃんと書く
+            if CLAUDE_FLAG:
+                if user_prompts[0] == "[Cue Card from Staff]番組開始です。まだ物語は開始せず、挨拶をしてください。":
+                    self.previous_messages.append({"role": "user", "content": "[Cue Card from Staff]番組開始です。まだ物語は開始せず、挨拶をしてください。"})
+                commentary_text = self.ai_generator_claude.generate_commentary(system_prompt, self.previous_messages, user_prompts, capture_base64_images)
+            else:
+                commentary_text = self.ai_generator.generate_commentary(system_prompt, self.previous_messages, user_prompts, capture_base64_images)
             retry_num += 1
             if commentary_text is None or not self._is_gpt_english_response(commentary_text):
                 break
@@ -111,7 +123,10 @@ class Streamer:
         commentary_text, split_commentary_texts = self._split_and_reflow_text_preserving_quotes(commentary_text)
 
         # メッセージ履歴の更新
-        self.previous_messages = OpenAIClient.update_previous_messages(self.previous_messages, commentary_text, partner_message)
+        if CLAUDE_FLAG:
+            self.previous_messages = ClaudeClient.update_previous_messages(self.previous_messages, commentary_text, partner_message)
+        else:
+            self.previous_messages = OpenAIClient.update_previous_messages(self.previous_messages, commentary_text, partner_message)
 
         # 実況文リストから感情、音声を生成し、その長さを取得
         generate_split_serif_data = []
@@ -169,7 +184,7 @@ class Streamer:
         #   性格特徴: 
         #   言葉遣い: 
         system_prompt += f'''
-Commentator (You) Information:
+Commentator (Your) Information:
 Name: {self.streamer_profile.name}
 Personality: {self.streamer_profile.personality}
 Speaking style: {self.streamer_profile.speaking_style}
@@ -177,7 +192,7 @@ Speaking style: {self.streamer_profile.speaking_style}
         if self.streamer_profile.partner_name != "":
             #   私の名前: 
             system_prompt += f'''
-                My Name: {self.streamer_profile.partner_name}
+Pertner Name: {self.streamer_profile.partner_name}
             '''
         if self.additional_prompt:
             system_prompt += self.additional_prompt
@@ -210,9 +225,9 @@ Speaking style: {self.streamer_profile.speaking_style}
         text_with_placeholders, placeholders = self.replace_quotes_with_placeholders(text)
         
         # 文末記号で分割する
-        sentences = re.split(r'(?<=[。？！])\s*', text_with_placeholders)
+        sentences = re.split(r'(?<=[。？！?!])\s*', text_with_placeholders)
         # 最後の文が完全な文かどうかをチェックする
-        if sentences[-1] and not re.search(r'[。？！]$', sentences[-1]):
+        if len(sentences) > 1 and sentences[-1] and not re.search(r'[。？！?!]$', sentences[-1]):
             sentences = sentences[:-1]
         
         # 分割後、プレースホルダーを元の引用文に戻す

@@ -123,6 +123,7 @@ class WebUI:
 
         return self._make_tts_connection_text(tts_status), gr.update(choices=self._get_tts_speakers())
     
+    # TTS接続状況をテキストに変換する
     def _make_tts_connection_text(self, tts_status):
         statuses = []
         for app_name, is_connected in tts_status:
