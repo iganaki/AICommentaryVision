@@ -168,3 +168,5 @@ db/*
 src/experiment.py
 src/vvid.py
 src/webui__.py
+
+data/BGM/
