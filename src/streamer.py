@@ -1,10 +1,11 @@
+from calendar import c
 from copy import deepcopy
 import random
 import re
 from sqlalchemy import between
 from audio import VoiceGenerator
 from claude_cliant import ClaudeClient
-from config import CLAUDE_FLAG
+from config import CLAUDE_FLAG, MESSAGE_HISTORY_LIMIT
 from log import Log
 from model import StreamerProfile
 from static_data import Role
@@ -71,11 +72,7 @@ class Streamer:
         
         # 過去のメッセージ履歴を格納するリストの初期化
         self.previous_messages = []
-        if CLAUDE_FLAG:
-            if self.streamer_profile.role == Role.DUO_VIDEO_HOST.value:
-                print("CLAUDEを使用するためのプロンプトを設定します。")
-                self.previous_messages.append({"role": "user", "content": "[Cue Card from Staff]番組開始です。まだ物語は開始せず、挨拶をしてください。"})
-        
+
         self.additional_prompt = None
 
     def get_profile(self):
@@ -87,26 +84,28 @@ class Streamer:
         self.log = log
 
     # 実況文を生成する
-    def speak(self, file_number, system_prompt, capture_base64_images = None, cue_card = "", partner_message="", start_time_sec=0.0):
-        system_prompt = self._create_system_prompt(system_prompt)
-        self.log.write_to_log_file("system_prompt", f"{file_number}:{system_prompt}") # ログにシステムプロンプトを記録
-        # ユーザープロンプトの作成
-        user_prompts = self._create_user_prompt(partner_message, cue_card)
-        for prompt in user_prompts:
-            if prompt != partner_message:
-                self.log.write_to_log_file("user_prompt", prompt)
+    def speak(self, file_number, system_prompts: list, capture_base64_images = None, cue_card = "", partner_message="", start_time_sec=0.0, serif_duration=300):
+        # システムプロンプトの追加
+        system_prompts = self._add_streamer_system_prompt(system_prompts)
+        for system_prompt in system_prompts:
+            self.log.write_to_log_file("system_prompt", f"{file_number}:{system_prompt}") # ログにシステムプロンプトを記録
+
+        self.log.write_to_log_file("cue_card", cue_card)
         
         # 実況文の生成とログへの出力
         max_retries = 3  # 再試行の最大回数
         retry_num = -1
         for _ in range(max_retries):
-            # 後でちゃんと書く
-            if CLAUDE_FLAG:
-                if user_prompts[0] == "[Cue Card from Staff]番組開始です。まだ物語は開始せず、挨拶をしてください。":
-                    self.previous_messages.append({"role": "user", "content": "[Cue Card from Staff]番組開始です。まだ物語は開始せず、挨拶をしてください。"})
-                commentary_text = self.ai_generator_claude.generate_commentary(system_prompt, self.previous_messages, user_prompts, capture_base64_images)
-            else:
-                commentary_text = self.ai_generator.generate_commentary(system_prompt, self.previous_messages, user_prompts, capture_base64_images)
+            if len(self.previous_messages) == 0 and self.streamer_profile.role == Role.DUO_VIDEO_HOST.value: # 2人実況で初回の実況文の場合、Claude3の制限でuserロールから開始する必要があるため、カンペを追加
+                if cue_card == "":
+                    self.previous_messages.append({"role": "user", "content": "<Cue_Card>番組開始です。</Cue_Card>"})
+                else:
+                    self.previous_messages.append({"role": "user", "content": cue_card})
+                    cue_card = ""
+            if self.streamer_profile.llm_model == "claude-3-sonnet-20240229" or self.streamer_profile.llm_model == "claude-3-opus-20240229":
+                commentary_text = self.ai_generator_claude.generate_commentary(system_prompts, self.previous_messages, partner_message, cue_card, serif_duration, self.streamer_profile.llm_model)
+            elif self.streamer_profile.llm_model == "gpt-4-turbo-preview":
+                commentary_text = self.ai_generator.generate_commentary(system_prompts, self.previous_messages, partner_message, cue_card, serif_duration, self.streamer_profile.llm_model)
             retry_num += 1
             if commentary_text is None or not self._is_gpt_english_response(commentary_text):
                 break
@@ -123,10 +122,10 @@ class Streamer:
         commentary_text, split_commentary_texts = self._split_and_reflow_text_preserving_quotes(commentary_text)
 
         # メッセージ履歴の更新
-        if CLAUDE_FLAG:
-            self.previous_messages = ClaudeClient.update_previous_messages(self.previous_messages, commentary_text, partner_message)
+        if self.streamer_profile.role == Role.DUO_VIDEO_HOST.value or self.streamer_profile.role == Role.DUO_VIDEO_GUEST.value:
+            self.previous_messages = self.update_previous_messages(self.previous_messages, commentary_text, partner_message)
         else:
-            self.previous_messages = OpenAIClient.update_previous_messages(self.previous_messages, commentary_text, partner_message)
+            self.previous_messages = self.update_previous_messages(self.previous_messages, commentary_text, cue_card)
 
         # 実況文リストから感情、音声を生成し、その長さを取得
         generate_split_serif_data = []
@@ -155,6 +154,23 @@ class Streamer:
             'text': commentary_text,
             'voice_duration': total_voice_duration,
         }, generate_split_serif_data
+
+    def _add_streamer_system_prompt(self, system_prompts: list):
+        # 実況者（あなた）の情報:
+        #   名前: 
+        #   性格特徴: 
+        #   言葉遣い: 
+        system_prompt = f'''
+<speaker><name>{self.streamer_profile.name}</name><personality>{self.streamer_profile.personality}</personality><speaking_style>{self.streamer_profile.speaking_style}</speaking_style></speaker>
+        '''
+        if self.streamer_profile.partner_name != "":
+            #   パートナーの名前: 
+            system_prompt += f'''<partner name>{self.streamer_profile.partner_name}></partner>'''
+        if self.additional_prompt:
+            system_prompt += self.additional_prompt
+
+        system_prompts.append(system_prompt)
+        return system_prompts
     
     def _is_gpt_english_response(self, response_text):
         """
@@ -178,27 +194,6 @@ class Streamer:
                 {additional_prompt_text}
         '''
 
-    def _create_system_prompt(self, system_prompt):
-        # 実況者（あなた）の情報:
-        #   名前: 
-        #   性格特徴: 
-        #   言葉遣い: 
-        system_prompt += f'''
-Commentator (Your) Information:
-Name: {self.streamer_profile.name}
-Personality: {self.streamer_profile.personality}
-Speaking style: {self.streamer_profile.speaking_style}
-        '''
-        if self.streamer_profile.partner_name != "":
-            #   私の名前: 
-            system_prompt += f'''
-Pertner Name: {self.streamer_profile.partner_name}
-            '''
-        if self.additional_prompt:
-            system_prompt += self.additional_prompt
-
-        return system_prompt
-
     def _create_user_prompt(self, partner_message, cue_card):
         """
         LLMに読ませるためのuserプロンプトリストを作成します。
@@ -217,7 +212,7 @@ Pertner Name: {self.streamer_profile.partner_name}
                 user_prompts.append(partner_message)
         
         if cue_card:
-            user_prompts.append(f"[Cue Card from Staff]{cue_card}")
+            user_prompts.append(f"<Cue_Card>{cue_card}</Cue_Card>")
 
         return user_prompts
 
@@ -268,3 +263,13 @@ Pertner Name: {self.streamer_profile.partner_name}
         for i, quote in enumerate(placeholders):
             text = text.replace(f"PLACEHOLDER_{i}", quote)
         return text
+    
+    def update_previous_messages(self, previous_messages: list, current_message, last_partner_message=""):
+        if last_partner_message != "":
+            previous_messages.append({"role": "user", "content": last_partner_message})
+        if current_message != "":
+            previous_messages.append({"role": "assistant", "content": current_message})
+        if len(previous_messages) > MESSAGE_HISTORY_LIMIT:
+            previous_messages = previous_messages[-MESSAGE_HISTORY_LIMIT:]
+        
+        return previous_messages

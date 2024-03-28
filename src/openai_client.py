@@ -5,7 +5,7 @@ import random
 import shutil
 from openai import OpenAI
 import requests
-from config import DATA_FOLDER, MESSAGE_HISTORY_LIMIT
+from config import DATA_FOLDER
 import log
 
 openai_api_key = os.getenv("OPENAI_API_KEY", "")
@@ -15,7 +15,7 @@ class OpenAIClient:
         self.debug_mode = debug_mode
         
     # 実況文を生成する。
-    def generate_commentary(self, system_prompt, previous_messages, user_prompts, capture_base64_images):
+    def generate_commentary(self, system_prompts, previous_messages, user_prompts, capture_base64_images):
         dummy_texts = ['これはデバッグ用のダミー応答です。いい。改行のテストのため、意図的に長い文章にしています。ご協力感謝します。',
                       'I\'m sorry, his is a dummy response for debugging. Good. It is intentionally long for testing line breaks. Thank you for your cooperation.',
                       'これは短いデバッグダミー応答です。',
@@ -35,7 +35,7 @@ class OpenAIClient:
         else:
             gpt_model = "gpt-4-turbo-preview"
 
-        commentary = self._generate_text(system_prompt, gpt_model, previous_messages=previous_messages, 
+        commentary = self._generate_text(system_prompts, gpt_model, previous_messages=previous_messages, 
                                          user_prompts=user_prompts, capture_base64_images=capture_base64_images, 
                                          dummy_text=dummy_text)
         return commentary
@@ -45,7 +45,7 @@ class OpenAIClient:
         dummy_texts = ['相方のうっかりエピソードを話して', '最近会ったうれしいことを話して', 'ここでボケて']
         dummy_text = random.choice(dummy_texts)
         gpt_model = "gpt-4-turbo-preview"
-        cue = self._generate_text(system_prompt, gpt_model, user_prompts=[user_prompt], dummy_text=dummy_text)
+        cue = self._generate_text([system_prompt], gpt_model, user_prompts=[user_prompt], dummy_text=dummy_text)
         return cue
         
     # ラジオのトークテーマを生成する
@@ -53,7 +53,7 @@ class OpenAIClient:
         dummy_texts = ['月に行ったら何したい？', '最近の夢を教えて', 'お風呂でどこから洗う？']
         dummy_text = random.choice(dummy_texts)
         gpt_model = "gpt-4-turbo-preview"
-        talk_theme = self._generate_text(system_prompt, gpt_model, user_prompts=[user_prompt], dummy_text=dummy_text)
+        talk_theme = self._generate_text([system_prompt], gpt_model, user_prompts=[user_prompt], dummy_text=dummy_text)
         return talk_theme
 
     # ラジオのトークの要約を生成する
@@ -66,7 +66,7 @@ class OpenAIClient:
         gpt_model = "gpt-4-turbo-preview"
         for index, serif_text in enumerate(serif_texts, start=1):
             dummy_text = f"{index}個めのトークまとめだよー！"
-            summary = self._generate_text(system_prompt, gpt_model, user_prompts=[serif_text], dummy_text=dummy_text)
+            summary = self._generate_text([system_prompt], gpt_model, user_prompts=[serif_text], dummy_text=dummy_text)
             summarys += f"{index}個めのトーク：" + summary + "\n"
         return summarys
     
@@ -74,12 +74,12 @@ class OpenAIClient:
     def generate_lerrer_from_listener(self, system_prompt, user_prompt):
         gpt_model = "gpt-4-turbo-preview"
         dummy_text = "こんにちは、いつも楽しくラジオを聞かせていただいています。"
-        letter = self._generate_text(system_prompt, gpt_model, user_prompts=[user_prompt], dummy_text=dummy_text)
+        letter = self._generate_text([system_prompt], gpt_model, user_prompts=[user_prompt], dummy_text=dummy_text)
         return letter
 
-    def _generate_text(self, system_prompt, gpt_model, max_tokens=300, temperature=0.7, 
+    def _generate_text(self, system_prompts, gpt_model, max_tokens=300, temperature=0.7, 
                       previous_messages=[], user_prompts=[], capture_base64_images=[], dummy_text="これはデバッグ用のダミー応答です。"):
-        messages = self._build_messages(system_prompt, previous_messages=previous_messages, 
+        messages = self._build_messages(system_prompts, previous_messages=previous_messages, 
                                         user_prompts=user_prompts, capture_base64_images=capture_base64_images)
         
         if self.debug_mode:
@@ -93,16 +93,18 @@ class OpenAIClient:
                     temperature=temperature,
                 )
             except Exception as e:
-                log.handle_api_error(e, "GPT4 API呼び出し中にエラーが発生しました", system_prompt=system_prompt, gpt_model=gpt_model, user_prompts=user_prompts)
+                log.handle_api_error(e, "GPT4 API呼び出し中にエラーが発生しました", system_prompt=system_prompts, gpt_model=gpt_model, user_prompts=user_prompts)
                 return None
             text = response.choices[0].message.content
 
         return text
 
     # OpenAI APIに渡すメッセージを組み立てる
-    def _build_messages(self, system_prompt, previous_messages=[], user_prompts=[], capture_base64_images=[], assistant_prompts=[]):
+    def _build_messages(self, system_prompts, previous_messages=[], user_prompts=[], capture_base64_images=[], assistant_prompts=[]):
         # システムプロンプト付加
-        messages = [{"role": "system", "content": system_prompt}]
+        messages = []
+        for system_prompt in system_prompts:
+            messages.append({"role": "system", "content": system_prompt})
         
         # 過去のプロンプトリストがあれば付加
         messages.extend(previous_messages)
@@ -172,7 +174,7 @@ class OpenAIClient:
             {{voice_emotion:, voice_speed:, voice_pitch:, voice_style:}}
         '''
         user_prompt = f"{text}"
-        messages = self._build_messages(system_prompt, user_prompts=[user_prompt])
+        messages = self._build_messages([system_prompt], user_prompts=[user_prompt])
         return messages
     
     def _generate_json(self, messages, gpt_model, dummy_json):
@@ -284,17 +286,4 @@ class OpenAIClient:
             '''
 
         return base_prompt
-    
-    @staticmethod
-    def update_previous_messages(previous_messages, assistant_message, partner_message=""):
-        if partner_message != "":
-            if isinstance(partner_message, list):
-                for message in partner_message:
-                    previous_messages.append({"role": "user", "content": message})
-            elif isinstance(partner_message, str):
-                previous_messages.append({"role": "user", "content": partner_message})
-        previous_messages.append({"role": "assistant", "content": assistant_message})
-        if len(previous_messages) > MESSAGE_HISTORY_LIMIT:
-            previous_messages = previous_messages[-MESSAGE_HISTORY_LIMIT:]
-        
-        return previous_messages
+

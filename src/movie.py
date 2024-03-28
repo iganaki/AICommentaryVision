@@ -36,7 +36,7 @@ class VideoProcessor:
 
         return duration
 
-    def get_video_capture_at_time(self, time_sec, resize_width=None, resize_height=None):
+    def get_video_frame_as_base64_image(self, time_sec, resize_width=None, resize_height=None):
         # 指定した秒数に対応するフレーム番号を計算
         frame_number = int(time_sec * self.fps)
 
@@ -62,6 +62,54 @@ class VideoProcessor:
         img_str = base64.b64encode(buffered.getvalue()).decode()
 
         return img_str
+
+    def get_video_frame_as_pil_image(self, time_sec, save_folder_path, resize_width=None, resize_height=None):
+        # 指定した秒数に対応するフレーム番号を計算
+        frame_number = int(time_sec * self.fps)
+
+        # 指定したフレーム番号にジャンプ
+        self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+
+        # フレームのキャプチャ
+        ret, frame = self.cap.read()
+
+        if not ret:
+            print("Failed to capture frame at time:", time_sec)
+            return None, None
+
+        # キャプチャしたフレームをPIL画像に変換
+        image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+
+        # 画像をリサイズ
+        if resize_width is not None and resize_height is not None:
+            image = image.resize((resize_width, resize_height), Image.Resampling.LANCZOS)
+
+        # 保存するファイル名を生成
+        file_name = f"{time_sec:04d}.jpg"
+
+        # 保存先のフルパスを生成
+        save_path = os.path.join(save_folder_path, file_name)
+
+        # 画像を保存
+        image.save(save_path, "JPEG")
+
+        return image, save_path
+
+    def get_frames_from_video(file_path, max_images=20):
+        video = cv2.VideoCapture(file_path)
+        base64_frames = []
+        while video.isOpened():
+            success, frame = video.read()
+            if not success:
+                break
+            _, encoded_frame = cv2.imencode(".jpg", frame)
+            base64_frame = base64.b64encode(encoded_frame).decode("utf-8")
+            base64_frames.append(base64_frame)
+        video.release()
+
+        # 選択する画像の数を制限する
+        selected_frames = base64_frames[0::len(base64_frames)//max_images][:max_images]
+        return selected_frames
 
     def _wrap_text(self, text, max_chars_per_line):
         # 既存の改行を取り除く
@@ -207,7 +255,10 @@ class VideoProcessor:
 
                 # 前のセクションから続く立ち絵が存在する場合、追加
                 if temp_image_path:
-                    image_clip = ImageClip(temp_image_path).set_duration(serifs[1].start_time_sec - serifs[0].start_time_sec).set_start(serifs[0].start_time_sec)
+                    if len(serifs) > 1:
+                        image_clip = ImageClip(temp_image_path).set_duration(serifs[1].start_time_sec - serifs[0].start_time_sec).set_start(serifs[0].start_time_sec)
+                    else:
+                        image_clip = ImageClip(temp_image_path).set_duration(serifs[0].voice_duration).set_start(serifs[0].start_time_sec)
                     image_clip = self._make_bounce_animation(image_clip, image_height, bounce_duration=0, location=temp_location)
                     clips.append(image_clip)
                     temp_image_path = None
@@ -253,7 +304,10 @@ class VideoProcessor:
                                 # 次の相手のセリフ（1個先のセリフ）が存在しない場合
                                 if index + 1 >= len(serifs):
                                     next_section_serifs = session.query(Serif).filter(Serif.video_title == title).filter(Serif.section_name == video_sections[sections_index + 1].section_name).order_by(Serif.start_time_sec).all()
-                                    duration = next_section_serifs[1].start_time_sec - part.start_time_sec
+                                    if len(next_section_serifs) > 1:
+                                        duration = next_section_serifs[1].start_time_sec - part.start_time_sec
+                                    else:
+                                        duration = next_section_serifs[0].start_time_sec - part.start_time_sec + next_section_serifs[0].voice_duration
                                     temp_image_path, temp_location = image_path, location
                                 # 次の自分のセリフ（2個先のセリフ）が存在しない場合
                                 elif index + 2 >= len(serifs):

@@ -1,5 +1,6 @@
+from calendar import c
 from contextlib import contextmanager
-from re import I
+from re import I, S, T
 from turtle import back
 from httpx import stream
 from numpy import integer
@@ -95,6 +96,7 @@ class ProgramType(Base):
     program_name = Column(String, unique=True)
     program_summary = Column(String)
     streamer_num = Column(Integer)
+    video_mode = Column(String) # story:ストーリーモード, game:ゲームモード, other:その他
     background_image_type = Column(Integer) # 0:画像,　1:動画
     user_additional_data1_name = Column(String, nullable=True)
     user_additional_data2_name = Column(String, nullable=True)
@@ -108,9 +110,9 @@ class StaticSection(Base):
     order  = Column(Integer)
     host_speaking_duration = Column(Integer)
     guest_speaking_duration = Column(Integer)
-    background_image_type = Column(Integer) # 0:生成, 1:前から継続, 2:指定したorderの背景と同じ, 3:動画
+    background_image_type = Column(Integer) # 0:生成, 1:前から継続, 2:指定したorderの背景と同じ, 3:指定, 4:動画
     background_image_order_num = Column(String, nullable=True)
-    background_image_prompt = Column(String, nullable=True)
+    background_image_prompt = Column(String, nullable=True) # USE_SECTION_SERIF:セクションのセリフを使う, それ以外:指定したプロンプトを使う、"3:指定"のときパスを入力  
     background_music_type = Column(Integer) # 0:指定, 1:ランダム, 2:前から継続, 3:指定したorderの背景と同じ, 4:なし
     background_music_path = Column(String, nullable=True)
     end_condition_type = Column(Integer) # 0:時間(秒), 1:セリフ数
@@ -123,7 +125,7 @@ class SerifSystemPrompt(Base):
     id = Column(Integer, primary_key=True)
     program_name = Column(String)
     section_name = Column(String)
-    streamer_type = Column(Integer) # 0:ホスト, 1:ゲスト
+    streamer_type = Column(Integer) # 0:ホスト, 1:ゲスト, 2:ソロ
     text = Column(String)
 
 # カンペシートテーブル
@@ -132,7 +134,7 @@ class CueSheet(Base):
     id = Column(Integer, primary_key=True)
     program_name = Column(String)
     section_name = Column(String)
-    streamer_type = Column(Integer) # 0:ホスト, 1:ゲスト
+    streamer_type = Column(Integer) # 0:ホスト, 1:ゲスト, 2:ソロ
     delivery_sequence = Column(Integer, default=0) # 0がランダム、1以上がそのセクションでの順番
     is_ai = Column(Boolean) # AI生成するかどうか
     cue_text = Column(String) # AIプロンプトまたは固定カンペのテキスト
@@ -163,6 +165,7 @@ class StreamerProfile(Base):
     speaking_style = Column(String)
     partner_name = Column(String)
     character_images_directory = Column(String)
+    llm_model = Column(String)
 
 # セリフテーブル
 class Serif(Base):
@@ -190,7 +193,7 @@ class Serif(Base):
         return serif
         
     @classmethod
-    def get_serif_text_by_section(cls, session, video_title, section_name=None, get_len=0, cue_card_flag=False):
+    def get_serif_text_by_section(cls, session, video_title, section_name=None, get_len=0, cue_card_flag=False, name_flag=True):
         # セクション名が指定されていない場合は全てのセクションのセリフを取得
         if section_name is None:
             serifs = session.query(cls).filter(cls.video_title == video_title).order_by(cls.start_time_sec).all()
@@ -212,11 +215,13 @@ class Serif(Base):
             text = serif.text
             cue_card = serif.cue_card
 
+            if name_flag:
+                formatted_serif = f"{name} : {text}"
+            else:
+                formatted_serif = f"{text}"
             # cue_card_flagがTrueで、cue_cardが空文字列でない場合に追加
             if cue_card_flag and cue_card:
-                formatted_serif = f"{name} : {text} (カンペ：{cue_card})"
-            else:
-                formatted_serif = f"{name} : {text}"
+                formatted_serif += f"（カンペ：{cue_card}）"
 
             # リストに追加
             formatted_serifs.append(formatted_serif)
@@ -256,3 +261,13 @@ class VideoSection(Base):
     end_time_sec = Column(Float)
     background_image_path = Column(String)
     background_music_path = Column(String)
+
+# 映像キャプチャ説明テーブル
+class VideoCapture(Base):
+    __tablename__ = 'video_captures'
+    id = Column(Integer, primary_key=True)
+    video_title = Column(String)
+    video_path = Column(String)
+    order = Column(Integer)
+    description = Column(String)
+    capture_image_path = Column(String)

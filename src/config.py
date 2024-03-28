@@ -30,6 +30,8 @@ START_TIME = 1.5              # 実況開始時間（秒）
 FADE_DURATION_SEC = 3         # フェード時間（秒）
 CUE_CARDS_PRINT_FLAG = False  # カンペ表示
 BACKUP_IMAGE_PATH = os.path.join(DATA_FOLDER, '../images/backup.jpg')  # バックアップ画像パス
+VIDEO_CAPTURE_INTERVAL = 2   # 動画キャプチャ間隔（秒）
+VIDEO_CAPTURE_START_TIME = 10  # 動画キャプチャ開始時間（秒）
 
 # 字幕・カンペ設定
 # ----------------
@@ -61,9 +63,8 @@ THEME_SETTINGS = {
     'stroke_width': 2,
     'font': SUBTITLE_FONT_Honoka_Shin_Maru_Gothic_R
 }
-
 # その他設定
 # --------------
-MESSAGE_HISTORY_LIMIT = 40  # メッセージ履歴上限
+MESSAGE_HISTORY_LIMIT = 20  # メッセージ履歴上限
 VOICEVOX_VVID_DATA_CSV = os.path.join(BASE_DIR, '../data/voicevox_speaker_style_ids.csv')  # VOICEVOXデータパス
 CLAUDE_FLAG = True  # CLAUDE使用フラグ

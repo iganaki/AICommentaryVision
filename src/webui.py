@@ -63,17 +63,22 @@ class WebUI:
                 with gr.Row():
                     debug_mode = gr.Checkbox(label="デバッグモード", value=True)
                     program_name = gr.Dropdown(choices=self._get_program_names_list(), label="番組名")
-                    streamer_num = gr.Radio(label="実況人数", choices=[1, 2], value=2)
                 with gr.Row():
                     title = gr.Textbox(label="動画タイトル(全角文字やファイルパスに使えない文字は使用不可)")
                 with gr.Accordion("番組追加情報", visible=True):
                     user_additional_data1 = gr.Textbox()
                     user_additional_data2 = gr.Textbox()
                 with gr.Row():
-                    streamer1_dropdown = gr.Dropdown(choices=self._get_streamers_list(), label="ストリーマー1")
-                    streamer1_profile = gr.TextArea(label="プロフィール")
-                    streamer2_dropdown = gr.Dropdown(choices=self._get_streamers_list(), label="ストリーマー2")
-                    streamer2_profile = gr.TextArea(label="プロフィール")
+                    with gr.Column():
+                        streamer1_dropdown = gr.Dropdown(choices=self._get_streamers_list(), label="ストリーマー1")
+                        streamer1_llm_model = gr.Dropdown(choices=["gpt-4-turbo-preview", "claude-3-opus-20240229", "claude-3-sonnet-20240229"], label="セリフの生成に使用するモデル")
+                    with gr.Column():
+                        streamer1_profile = gr.TextArea(label="プロフィール")
+                    with gr.Column():
+                        streamer2_dropdown = gr.Dropdown(choices=self._get_streamers_list(), label="ストリーマー2")
+                        streamer2_llm_model = gr.Dropdown(choices=["gpt-4-turbo-preview", "claude-3-opus-20240229", "claude-3-sonnet-20240229"], label="セリフの生成に使用するモデル")
+                    with gr.Column():
+                        streamer2_profile = gr.TextArea(label="プロフィール")
                 with gr.Accordion("詳細設定", open=False):
                     open_ai_api_key = gr.Textbox(label="OpenAI APIキー")
                 with gr.Row():
@@ -113,7 +118,7 @@ class WebUI:
             # 動画作成ボタンのアクション
             create_video_button.click(
                 fn=self._create_video,
-                inputs=[debug_mode, streamer1_dropdown, streamer2_dropdown, streamer_num, program_name, title, user_additional_data1, user_additional_data2],
+                inputs=[debug_mode, streamer1_dropdown, streamer2_dropdown, program_name, title, streamer1_llm_model, streamer2_llm_model, user_additional_data1, user_additional_data2],
                 outputs=[video_output, video_output_path]
             )
 
@@ -249,14 +254,18 @@ class WebUI:
             return [p.program_name for p in programs]
         
     # 動画を作成する
-    def _create_video(self, debug_mode, streamer1_name, streamer2_name, streamer_num, program_name, title, user_additional_data1, user_additional_data2):
+    def _create_video(self, debug_mode, streamer1_name, streamer2_name, program_name, title, streamer1_llm_model, streamer2_llm_model, user_additional_data1, user_additional_data2):
         # 動画情報をデータベースに登録
         title = self._set_video_info(title, program_name, user_additional_data1, user_additional_data2)
         if title == "":
             return "すでにそのタイトルの動画が存在します"
+        
+        with model.session_scope() as session:
+            program = session.query(model.ProgramType).filter(model.ProgramType.program_name == program_name).first()
+            streamer_num = program.streamer_num
 
         # ストリーマーをデータベースに登録
-        self._set_streamers_info(streamer1_name, streamer2_name, streamer_num, title)
+        self._set_streamers_info(streamer1_name, streamer2_name, streamer_num, title, streamer1_llm_model, streamer2_llm_model)
 
         # 動画を作成
         self.studio.initialize_project(title, debug_mode)
@@ -283,8 +292,9 @@ class WebUI:
        
         return title
     
-    def _set_streamers_info(self, streamer1_name, streamer2_name, streamer_num, title):
+    def _set_streamers_info(self, streamer1_name, streamer2_name, streamer_num, title, streamer1_llm_model, streamer2_llm_model):
         streamer2_name = "" if streamer_num == 1 else streamer2_name
+        llm_model = [streamer1_llm_model, streamer2_llm_model]
         partner_names = [streamer2_name, streamer1_name]
         for index, streamer in enumerate([streamer1_name, streamer2_name]):
             if streamer == "":
@@ -304,7 +314,8 @@ class WebUI:
                         personality=streamer_profile.personality,
                         speaking_style=streamer_profile.speaking_style,
                         partner_name=partner_names[index],
-                        character_images_directory=streamer_profile.character_images_directory
+                        character_images_directory=streamer_profile.character_images_directory,
+                        llm_model=llm_model[index]
                     )
                     session.add(streamer_profile)
                     session.commit()
