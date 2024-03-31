@@ -170,3 +170,6 @@ src/vvid.py
 src/webui__.py
 
 data/BGM/
+
+generate_project_summary.py
+AICommentaryVision_project_summary.txt
