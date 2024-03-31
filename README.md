@@ -75,6 +75,9 @@ python src/webui.py
 
 このプロジェクトはMITライセンスの下で公開されています。詳細については、`LICENSE`ファイルを参照してください。
 
+## 謝辞
+
+このREADMEは、[generate-project-summary](https://github.com/Olemi-llm-apprentice/generate-project-summary)とClaude3を使用して作成されました。これらのツールを提供してくださった開発者の方々に感謝いたします。
 
 ## 免責事項
 
